@@ -1,12 +1,5 @@
 import type { ServerProvider } from "@t3tools/contracts";
-import * as Duration from "effect/Duration";
-import * as Effect from "effect/Effect";
-import * as Equal from "effect/Equal";
-import * as Fiber from "effect/Fiber";
-import * as PubSub from "effect/PubSub";
-import * as Ref from "effect/Ref";
-import * as Scope from "effect/Scope";
-import * as Stream from "effect/Stream";
+import { Duration, Effect, Equal, Fiber, PubSub, Ref, Scope, Stream } from "effect";
 import * as Semaphore from "effect/Semaphore";
 
 import type { ServerProviderShape } from "./Services/ServerProvider.ts";
@@ -20,11 +13,11 @@ interface ProviderSnapshotState {
 export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(function* <
   Settings,
 >(input: {
-  readonly maintenanceCapabilities: ServerProviderShape["maintenanceCapabilities"];
   readonly getSettings: Effect.Effect<Settings>;
   readonly streamSettings: Stream.Stream<Settings>;
   readonly haveSettingsChanged: (previous: Settings, next: Settings) => boolean;
-  readonly initialSnapshot: (settings: Settings) => Effect.Effect<ServerProvider>;
+  readonly buildInitialSnapshot?: ((settings: Settings) => ServerProvider) | undefined;
+  readonly initialSnapshot?: ((settings: Settings) => ServerProvider) | undefined;
   readonly checkProvider: Effect.Effect<ServerProvider, ServerSettingsError>;
   readonly enrichSnapshot?: (input: {
     readonly settings: Settings;
@@ -34,18 +27,26 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
   }) => Effect.Effect<void>;
   readonly refreshInterval?: Duration.Input;
 }): Effect.fn.Return<ServerProviderShape, ServerSettingsError, Scope.Scope> {
+  type InitialRefreshState = "idle" | "running" | "done";
   const refreshSemaphore = yield* Semaphore.make(1);
   const changesPubSub = yield* Effect.acquireRelease(
     PubSub.unbounded<ServerProvider>(),
     PubSub.shutdown,
   );
   const initialSettings = yield* input.getSettings;
-  const initialSnapshot = yield* input.initialSnapshot(initialSettings);
+  const initialSnapshotFactory = input.buildInitialSnapshot ?? input.initialSnapshot;
+  if (!initialSnapshotFactory) {
+    return yield* Effect.die(
+      new Error("makeManagedServerProvider requires an initial snapshot factory."),
+    );
+  }
+  const initialSnapshot = initialSnapshotFactory(initialSettings);
   const snapshotStateRef = yield* Ref.make<ProviderSnapshotState>({
     snapshot: initialSnapshot,
     enrichmentGeneration: 0,
   });
   const settingsRef = yield* Ref.make(initialSettings);
+  const initialRefreshStateRef = yield* Ref.make<InitialRefreshState>("idle");
   const enrichmentFiberRef = yield* Ref.make<Fiber.Fiber<void, unknown> | null>(null);
   const scope = yield* Effect.scope;
 
@@ -57,6 +58,7 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
       if (state.enrichmentGeneration !== generation || Equal.equals(state.snapshot, nextSnapshot)) {
         return [null, state] as const;
       }
+
       return [
         nextSnapshot,
         {
@@ -122,6 +124,7 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
       ] as const;
     });
     yield* Ref.set(settingsRef, nextSettings);
+    yield* Ref.set(initialRefreshStateRef, "done");
     yield* PubSub.publish(changesPubSub, nextSnapshot);
     yield* restartSnapshotEnrichment(nextSettings, nextSnapshot, nextGeneration);
     return nextSnapshot;
@@ -134,6 +137,28 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
     return yield* applySnapshot(nextSettings, { forceRefresh: true });
   });
 
+  const startInitialRefreshIfNeeded = Effect.fn("startInitialRefreshIfNeeded")(function* () {
+    const shouldStart = yield* Ref.modify(
+      initialRefreshStateRef,
+      (state): readonly [boolean, InitialRefreshState] =>
+        state === "idle" ? [true, "running"] : [false, state],
+    );
+
+    if (!shouldStart) {
+      return;
+    }
+
+    yield* refreshSnapshot().pipe(
+      Effect.onExit((exit) =>
+        exit._tag === "Failure"
+          ? Ref.update(initialRefreshStateRef, (state) => (state === "running" ? "idle" : state))
+          : Effect.void,
+      ),
+      Effect.ignoreCause({ log: true }),
+      Effect.forkIn(scope),
+    );
+  });
+
   yield* Stream.runForEach(input.streamSettings, (nextSettings) =>
     Effect.asVoid(applySnapshot(nextSettings)),
   ).pipe(Effect.forkScoped);
@@ -144,18 +169,17 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
       Effect.ignoreCause({ log: true }),
     ),
   ).pipe(Effect.forkScoped);
-
-  yield* applySnapshot(initialSettings, { forceRefresh: true }).pipe(
-    Effect.ignoreCause({ log: true }),
-    Effect.forkScoped,
-  );
+  yield* startInitialRefreshIfNeeded();
 
   return {
-    maintenanceCapabilities: input.maintenanceCapabilities,
-    getSnapshot: input.getSettings.pipe(
-      Effect.flatMap(applySnapshot),
-      Effect.tapError(Effect.logError),
-      Effect.orDie,
+    getSnapshot: startInitialRefreshIfNeeded().pipe(
+      Effect.flatMap(() =>
+        input.getSettings.pipe(
+          Effect.flatMap(applySnapshot),
+          Effect.tapError(Effect.logError),
+          Effect.orDie,
+        ),
+      ),
     ),
     refresh: refreshSnapshot().pipe(Effect.tapError(Effect.logError), Effect.orDie),
     get streamChanges() {

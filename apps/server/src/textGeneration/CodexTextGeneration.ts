@@ -1,57 +1,45 @@
-import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
-import * as Option from "effect/Option";
-import * as Path from "effect/Path";
-import * as Schema from "effect/Schema";
-import * as Scope from "effect/Scope";
-import * as Stream from "effect/Stream";
+import { randomUUID } from "node:crypto";
+
+import { Effect, FileSystem, Layer, Option, Path, Schema, Scope, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-import { type CodexSettings, type ModelSelection } from "@t3tools/contracts";
+import { CodexModelSelection } from "@t3tools/contracts";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
 
-import { resolveAttachmentPath } from "../attachmentStore.ts";
-import { ServerConfig } from "../config.ts";
-import { expandHomePath } from "../pathExpansion.ts";
+import { resolveAttachmentPath } from "../../attachmentStore.ts";
+import { ServerConfig } from "../../config.ts";
 import { TextGenerationError } from "@t3tools/contracts";
 import {
   type BranchNameGenerationInput,
   type ThreadTitleGenerationResult,
   type TextGenerationShape,
-} from "./TextGeneration.ts";
+  TextGeneration,
+} from "../Services/TextGeneration.ts";
 import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
   buildThreadTitlePrompt,
-} from "./TextGenerationPrompts.ts";
+} from "../Prompts.ts";
 import {
   normalizeCliError,
   sanitizeCommitSubject,
   sanitizePrTitle,
   sanitizeThreadTitle,
   toJsonSchemaObject,
-} from "./TextGenerationUtils.ts";
-import {
-  getModelSelectionBooleanOptionValue,
-  getModelSelectionStringOptionValue,
-} from "@t3tools/shared/model";
+} from "../Utils.ts";
+import { getCodexModelCapabilities } from "../../provider/codexModels.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
+import { normalizeCodexModelOptionsWithCapabilities } from "@t3tools/shared/model";
 
 const CODEX_GIT_TEXT_GENERATION_REASONING_EFFORT = "low";
 const CODEX_TIMEOUT_MS = 180_000;
-const encodeJsonString = Schema.encodeEffect(Schema.UnknownFromJsonString);
-/**
- * Build a Codex text-generation closure bound to a specific `CodexSettings`
- * payload. See `makeCodexAdapter` for the overall per-instance rationale.
- */
-export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(function* (
-  codexConfig: CodexSettings,
-  environment: NodeJS.ProcessEnv = process.env,
-) {
+const makeCodexTextGeneration = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const serverConfig = yield* Effect.service(ServerConfig);
+  const serverSettingsService = yield* Effect.service(ServerSettingsService);
 
   type MaterializedImageAttachments = {
     readonly imagePaths: ReadonlyArray<string>;
@@ -76,10 +64,10 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     operation: string,
     prefix: string,
     content: string,
-  ): Effect.Effect<string, TextGenerationError, Scope.Scope> =>
-    fileSystem
+  ): Effect.Effect<string, TextGenerationError, Scope.Scope> => {
+    return fileSystem
       .makeTempFileScoped({
-        prefix: `t3code-${prefix}-${process.pid}-`,
+        prefix: `t3code-${prefix}-${process.pid}-${randomUUID()}.tmp`,
       })
       .pipe(
         Effect.tap((filePath) => fileSystem.writeFileString(filePath, content)),
@@ -92,28 +80,10 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
             }),
         ),
       );
+  };
 
   const safeUnlink = (filePath: string): Effect.Effect<void, never> =>
     fileSystem.remove(filePath).pipe(Effect.catch(() => Effect.void));
-
-  const encodeJsonForOperation = (
-    operation:
-      | "generateCommitMessage"
-      | "generatePrContent"
-      | "generateBranchName"
-      | "generateThreadTitle",
-    value: unknown,
-  ): Effect.Effect<string, TextGenerationError> =>
-    encodeJsonString(value).pipe(
-      Effect.mapError(
-        (cause) =>
-          new TextGenerationError({
-            operation,
-            detail: "Failed to encode structured output schema.",
-            cause,
-          }),
-      ),
-    );
 
   const materializeImageAttachments = Effect.fn("materializeImageAttachments")(function* (
     _operation:
@@ -170,21 +140,29 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     outputSchemaJson: S;
     imagePaths?: ReadonlyArray<string>;
     cleanupPaths?: ReadonlyArray<string>;
-    modelSelection: ModelSelection;
+    modelSelection: CodexModelSelection;
   }): Effect.fn.Return<S["Type"], TextGenerationError, S["DecodingServices"]> {
-    const schemaJson = yield* encodeJsonForOperation(
+    const schemaPath = yield* writeTempFile(
       operation,
-      toJsonSchemaObject(outputSchemaJson),
+      "codex-schema",
+      JSON.stringify(toJsonSchemaObject(outputSchemaJson)),
     );
-    const schemaPath = yield* writeTempFile(operation, "codex-schema", schemaJson);
     const outputPath = yield* writeTempFile(operation, "codex-output", "");
 
+    const codexSettings = yield* Effect.map(
+      serverSettingsService.getSettings,
+      (settings) => settings.providers.codex,
+    ).pipe(Effect.catch(() => Effect.undefined));
+
     const runCodexCommand = Effect.fn("runCodexJson.runCodexCommand")(function* () {
+      const normalizedOptions = normalizeCodexModelOptionsWithCapabilities(
+        getCodexModelCapabilities(modelSelection.model),
+        modelSelection.options,
+      );
       const reasoningEffort =
-        getModelSelectionStringOptionValue(modelSelection, "reasoningEffort") ??
-        CODEX_GIT_TEXT_GENERATION_REASONING_EFFORT;
+        modelSelection.options?.reasoningEffort ?? CODEX_GIT_TEXT_GENERATION_REASONING_EFFORT;
       const command = ChildProcess.make(
-        codexConfig.binaryPath || "codex",
+        codexSettings?.binaryPath || "codex",
         [
           "exec",
           "--ephemeral",
@@ -195,9 +173,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
           modelSelection.model,
           "--config",
           `model_reasoning_effort="${reasoningEffort}"`,
-          ...(getModelSelectionBooleanOptionValue(modelSelection, "fastMode") === true
-            ? ["--config", `service_tier="fast"`]
-            : []),
+          ...(normalizedOptions?.fastMode ? ["--config", `service_tier="fast"`] : []),
           "--output-schema",
           schemaPath,
           "--output-last-message",
@@ -207,8 +183,8 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         ],
         {
           env: {
-            ...environment,
-            ...(codexConfig.homePath ? { CODEX_HOME: expandHomePath(codexConfig.homePath) } : {}),
+            ...process.env,
+            ...(codexSettings?.homePath ? { CODEX_HOME: codexSettings.homePath } : {}),
           },
           cwd,
           shell: process.platform === "win32",
@@ -275,8 +251,6 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         ),
       );
 
-      const decodeOutput = Schema.decodeEffect(Schema.fromJsonString(outputSchemaJson));
-
       return yield* fileSystem.readFileString(outputPath).pipe(
         Effect.mapError(
           (cause) =>
@@ -286,7 +260,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
               cause,
             }),
         ),
-        Effect.flatMap(decodeOutput),
+        Effect.flatMap(Schema.decodeEffect(Schema.fromJsonString(outputSchemaJson))),
         Effect.catchTag("SchemaError", (cause) =>
           Effect.fail(
             new TextGenerationError({
@@ -309,6 +283,13 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       stagedPatch: input.stagedPatch,
       includeBranch: input.includeBranch === true,
     });
+
+    if (input.modelSelection.provider !== "codex") {
+      return yield* new TextGenerationError({
+        operation: "generateCommitMessage",
+        detail: "Invalid model selection.",
+      });
+    }
 
     const generated = yield* runCodexJson({
       operation: "generateCommitMessage",
@@ -338,6 +319,13 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       diffPatch: input.diffPatch,
     });
 
+    if (input.modelSelection.provider !== "codex") {
+      return yield* new TextGenerationError({
+        operation: "generatePrContent",
+        detail: "Invalid model selection.",
+      });
+    }
+
     const generated = yield* runCodexJson({
       operation: "generatePrContent",
       cwd: input.cwd,
@@ -363,6 +351,13 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       message: input.message,
       attachments: input.attachments,
     });
+
+    if (input.modelSelection.provider !== "codex") {
+      return yield* new TextGenerationError({
+        operation: "generateBranchName",
+        detail: "Invalid model selection.",
+      });
+    }
 
     const generated = yield* runCodexJson({
       operation: "generateBranchName",
@@ -390,6 +385,13 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       attachments: input.attachments,
     });
 
+    if (input.modelSelection.provider !== "codex") {
+      return yield* new TextGenerationError({
+        operation: "generateThreadTitle",
+        detail: "Invalid model selection.",
+      });
+    }
+
     const generated = yield* runCodexJson({
       operation: "generateThreadTitle",
       cwd: input.cwd,
@@ -411,3 +413,5 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     generateThreadTitle,
   } satisfies TextGenerationShape;
 });
+
+export const CodexTextGenerationLive = Layer.effect(TextGeneration, makeCodexTextGeneration);

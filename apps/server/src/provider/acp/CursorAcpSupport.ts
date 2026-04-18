@@ -1,7 +1,5 @@
-import { type CursorSettings, type ProviderOptionSelection } from "@t3tools/contracts";
-import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import * as Scope from "effect/Scope";
+import { type CursorModelOptions, type CursorSettings } from "@t3tools/contracts";
+import { Effect, Layer } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import type * as EffectAcpErrors from "effect-acp/errors";
 
@@ -25,7 +23,6 @@ export interface CursorAcpRuntimeInput extends Omit<
 > {
   readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
   readonly cursorSettings: CursorAcpRuntimeCursorSettings | null | undefined;
-  readonly environment?: NodeJS.ProcessEnv;
 }
 
 export interface CursorAcpModelSelectionErrorContext {
@@ -37,7 +34,6 @@ export interface CursorAcpModelSelectionErrorContext {
 export function buildCursorAcpSpawnInput(
   cursorSettings: CursorAcpRuntimeCursorSettings | null | undefined,
   cwd: string,
-  environment?: NodeJS.ProcessEnv,
 ): AcpSpawnInput {
   return {
     command: cursorSettings?.binaryPath || "agent",
@@ -46,18 +42,17 @@ export function buildCursorAcpSpawnInput(
       "acp",
     ],
     cwd,
-    ...(environment ? { env: environment } : {}),
   };
 }
 
 export const makeCursorAcpRuntime = (
   input: CursorAcpRuntimeInput,
-): Effect.Effect<AcpSessionRuntimeShape, EffectAcpErrors.AcpError, Scope.Scope> =>
+): Effect.Effect<AcpSessionRuntimeShape, EffectAcpErrors.AcpError> =>
   Effect.gen(function* () {
     const acpContext = yield* Layer.build(
       AcpSessionRuntime.layer({
         ...input,
-        spawn: buildCursorAcpSpawnInput(input.cursorSettings, input.cwd, input.environment),
+        spawn: buildCursorAcpSpawnInput(input.cursorSettings, input.cwd),
         authMethodId: "cursor_login",
         clientCapabilities: CURSOR_PARAMETERIZED_MODEL_PICKER_CAPABILITIES,
       }).pipe(
@@ -67,7 +62,7 @@ export const makeCursorAcpRuntime = (
       ),
     );
     return yield* Effect.service(AcpSessionRuntime).pipe(Effect.provide(acpContext));
-  });
+  }).pipe(Effect.scoped);
 
 interface CursorAcpModelSelectionRuntime {
   readonly getConfigOptions: AcpSessionRuntimeShape["getConfigOptions"];
@@ -81,7 +76,7 @@ interface CursorAcpModelSelectionRuntime {
 export function applyCursorAcpModelSelection<E>(input: {
   readonly runtime: CursorAcpModelSelectionRuntime;
   readonly model: string | null | undefined;
-  readonly selections: ReadonlyArray<ProviderOptionSelection> | null | undefined;
+  readonly modelOptions: CursorModelOptions | null | undefined;
   readonly mapError: (context: CursorAcpModelSelectionErrorContext) => E;
 }): Effect.Effect<void, E> {
   return Effect.gen(function* () {
@@ -96,7 +91,7 @@ export function applyCursorAcpModelSelection<E>(input: {
 
     const configUpdates = resolveCursorAcpConfigUpdates(
       yield* input.runtime.getConfigOptions,
-      input.selections,
+      input.modelOptions,
     );
     for (const update of configUpdates) {
       yield* input.runtime.setConfigOption(update.configId, update.value).pipe(

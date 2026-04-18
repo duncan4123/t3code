@@ -143,10 +143,9 @@ export const CodexAppServerError = Schema.Union([
 ]);
 
 export type CodexAppServerError = typeof CodexAppServerError.Type;
-const isCodexAppServerRequestError = Schema.is(CodexAppServerRequestError);
 
 export function normalizeToRequestError(error: CodexAppServerError): CodexAppServerRequestError {
-  return isCodexAppServerRequestError(error)
+  return Schema.is(CodexAppServerRequestError)(error)
     ? error
     : CodexAppServerRequestError.internalError(error.message);
 }

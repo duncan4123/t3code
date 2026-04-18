@@ -17,8 +17,6 @@ import {
 } from "./_internal/shared.ts";
 import { makeChildStdio, makeTerminationError } from "./_internal/stdio.ts";
 
-const DEFAULT_APP_SERVER_FORCE_KILL_AFTER = "2 seconds" as const;
-
 export interface CodexAppServerClientOptions {
   readonly logIncoming?: boolean;
   readonly logOutgoing?: boolean;
@@ -75,7 +73,7 @@ export interface CodexAppServerClientShape {
 export class CodexAppServerClient extends Context.Service<
   CodexAppServerClient,
   CodexAppServerClientShape
->()("effect-codex-app-server/client/CodexAppServerClient") {}
+>()("effect-codex-app-server/CodexAppServerClient") {}
 
 type ServerRequestHandler = (
   payload: unknown,
@@ -275,26 +273,26 @@ export const layerCommand = (
 > =>
   Layer.effect(
     CodexAppServerClient,
-    Effect.gen(function* () {
-      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const command = ChildProcess.make(options.command, [...(options.args ?? [])], {
-        ...(options.cwd ? { cwd: options.cwd } : {}),
-        ...(options.env ? { env: { ...process.env, ...options.env } } : {}),
-        forceKillAfter: DEFAULT_APP_SERVER_FORCE_KILL_AFTER,
-        shell: process.platform === "win32",
-      });
-      return yield* spawner.spawn(command).pipe(
-        Effect.mapError(
-          (cause) =>
-            new CodexError.CodexAppServerSpawnError({
-              command: [options.command, ...(options.args ?? [])].join(" "),
-              cause,
-            }),
-        ),
-      );
-    }).pipe(
-      Effect.flatMap((handle) =>
-        make(makeChildStdio(handle), options, makeTerminationError(handle)),
-      ),
-    ),
+    Effect.acquireRelease(
+      Effect.gen(function* () {
+        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const command = ChildProcess.make(options.command, [...(options.args ?? [])], {
+          ...(options.cwd ? { cwd: options.cwd } : {}),
+          ...(options.env ? { env: { ...process.env, ...options.env } } : {}),
+          shell: process.platform === "win32",
+        });
+        const handle = yield* spawner.spawn(command).pipe(
+          Effect.mapError(
+            (cause) =>
+              new CodexError.CodexAppServerSpawnError({
+                command: [options.command, ...(options.args ?? [])].join(" "),
+                cause,
+              }),
+          ),
+        );
+        const client = yield* make(makeChildStdio(handle), options, makeTerminationError(handle));
+        return { client, handle };
+      }),
+      ({ handle }) => handle.kill().pipe(Effect.orDie),
+    ).pipe(Effect.map(({ client }) => client)),
   );

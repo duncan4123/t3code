@@ -1,16 +1,19 @@
-import * as Context from "effect/Context";
-import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import type { ChatAttachment, ModelSelection, ProviderInstanceId } from "@t3tools/contracts";
-import { TextGenerationError } from "@t3tools/contracts";
+/**
+ * TextGeneration - Effect service contract for AI-generated Git content.
+ *
+ * Generates commit messages and pull request titles/bodies from repository
+ * context prepared by Git services.
+ *
+ * @module TextGeneration
+ */
+import { Context } from "effect";
+import type { Effect } from "effect";
+import type { ChatAttachment, ModelSelection } from "@t3tools/contracts";
 
-import {
-  ProviderInstanceRegistry,
-  type ProviderInstanceRegistryShape,
-} from "../provider/Services/ProviderInstanceRegistry.ts";
-import type { ProviderInstance } from "../provider/ProviderDriver.ts";
+import type { TextGenerationError } from "@t3tools/contracts";
 
-export type TextGenerationProvider = "codex" | "claudeAgent" | "cursor" | "opencode";
+/** Providers that support git text generation (commit messages, PR content, branch names). */
+export type TextGenerationProvider = "codex" | "claudeAgent" | "cursor";
 
 export interface CommitMessageGenerationInput {
   cwd: string;
@@ -116,58 +119,5 @@ export interface TextGenerationShape {
  * TextGeneration - Service tag for commit and PR text generation.
  */
 export class TextGeneration extends Context.Service<TextGeneration, TextGenerationShape>()(
-  "t3/textGeneration/TextGeneration",
+  "t3/git/Services/TextGeneration",
 ) {}
-
-type TextGenerationOp =
-  | "generateCommitMessage"
-  | "generatePrContent"
-  | "generateBranchName"
-  | "generateThreadTitle";
-
-const resolveInstance = (
-  registry: ProviderInstanceRegistryShape,
-  operation: TextGenerationOp,
-  instanceId: ProviderInstanceId,
-): Effect.Effect<ProviderInstance["textGeneration"], TextGenerationError> =>
-  registry.getInstance(instanceId).pipe(
-    Effect.flatMap((instance) =>
-      instance
-        ? Effect.succeed(instance.textGeneration)
-        : Effect.fail(
-            new TextGenerationError({
-              operation,
-              detail: `No provider instance registered for id '${instanceId}'.`,
-            }),
-          ),
-    ),
-  );
-
-export const makeTextGenerationFromRegistry = (
-  registry: ProviderInstanceRegistryShape,
-): TextGenerationShape => ({
-  generateCommitMessage: (input) =>
-    resolveInstance(registry, "generateCommitMessage", input.modelSelection.instanceId).pipe(
-      Effect.flatMap((textGeneration) => textGeneration.generateCommitMessage(input)),
-    ),
-  generatePrContent: (input) =>
-    resolveInstance(registry, "generatePrContent", input.modelSelection.instanceId).pipe(
-      Effect.flatMap((textGeneration) => textGeneration.generatePrContent(input)),
-    ),
-  generateBranchName: (input) =>
-    resolveInstance(registry, "generateBranchName", input.modelSelection.instanceId).pipe(
-      Effect.flatMap((textGeneration) => textGeneration.generateBranchName(input)),
-    ),
-  generateThreadTitle: (input) =>
-    resolveInstance(registry, "generateThreadTitle", input.modelSelection.instanceId).pipe(
-      Effect.flatMap((textGeneration) => textGeneration.generateThreadTitle(input)),
-    ),
-});
-
-export const layer = Layer.effect(
-  TextGeneration,
-  Effect.gen(function* () {
-    const registry = yield* ProviderInstanceRegistry;
-    return makeTextGenerationFromRegistry(registry);
-  }),
-);
