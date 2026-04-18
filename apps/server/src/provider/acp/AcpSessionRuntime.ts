@@ -90,7 +90,7 @@ export interface AcpSessionRuntimeShape {
   readonly handleExtRequest: EffectAcpClient.AcpClientShape["handleExtRequest"];
   readonly handleExtNotification: EffectAcpClient.AcpClientShape["handleExtNotification"];
   readonly start: () => Effect.Effect<AcpSessionRuntimeStartResult, EffectAcpErrors.AcpError>;
-  readonly events: Stream.Stream<AcpParsedSessionEvent, never>;
+  readonly getEvents: () => Stream.Stream<AcpParsedSessionEvent, never>;
   readonly getModeState: Effect.Effect<AcpSessionModeState | undefined>;
   readonly getConfigOptions: Effect.Effect<ReadonlyArray<EffectAcpSchema.SessionConfigOption>>;
   readonly prompt: (
@@ -113,7 +113,6 @@ export interface AcpSessionRuntimeShape {
     method: string,
     payload: unknown,
   ) => Effect.Effect<void, EffectAcpErrors.AcpError>;
-  readonly close: Effect.Effect<void>;
 }
 
 interface AcpStartedState extends AcpSessionRuntimeStartResult {}
@@ -155,11 +154,11 @@ const makeAcpSessionRuntime = (
 ): Effect.Effect<
   AcpSessionRuntimeShape,
   EffectAcpErrors.AcpError,
-  ChildProcessSpawner.ChildProcessSpawner
+  ChildProcessSpawner.ChildProcessSpawner | Scope.Scope
 > =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const runtimeScope = yield* Scope.make("sequential");
+    const runtimeScope = yield* Scope.Scope;
     const eventQueue = yield* Queue.unbounded<AcpParsedSessionEvent>();
     const modeStateRef = yield* Ref.make<AcpSessionModeState | undefined>(undefined);
     const toolCallsRef = yield* Ref.make(new Map<string, AcpToolCallState>());
@@ -240,7 +239,6 @@ const makeAcpSessionRuntime = (
         params: notification,
       }),
     );
-    const close = Scope.close(runtimeScope, Exit.void).pipe(Effect.asVoid);
 
     const initializeClientCapabilities = {
       fs: {
@@ -324,32 +322,47 @@ const makeAcpSessionRuntime = (
         | EffectAcpSchema.ResumeSessionResponse,
     ): Effect.Effect<void> => Ref.set(configOptionsRef, sessionConfigOptionsFromSetup(response));
 
+    const updateCurrentModeId = (modeId: string): Effect.Effect<void> =>
+      Ref.update(modeStateRef, (current) =>
+        current ? { ...current, currentModeId: modeId } : current,
+      );
+
     const setConfigOption = (
       configId: string,
       value: string | boolean,
     ): Effect.Effect<EffectAcpSchema.SetSessionConfigOptionResponse, EffectAcpErrors.AcpError> =>
       validateConfigOptionValue(configId, value).pipe(
         Effect.flatMap(() => getStartedState),
-        Effect.flatMap((started) => {
-          const requestPayload =
-            typeof value === "boolean"
-              ? ({
-                  sessionId: started.sessionId,
-                  configId,
-                  type: "boolean",
-                  value,
-                } satisfies EffectAcpSchema.SetSessionConfigOptionRequest)
-              : ({
-                  sessionId: started.sessionId,
-                  configId,
-                  value: String(value),
-                } satisfies EffectAcpSchema.SetSessionConfigOptionRequest);
-          return runLoggedRequest(
-            "session/set_config_option",
-            requestPayload,
-            acp.agent.setSessionConfigOption(requestPayload),
-          ).pipe(Effect.tap((response) => updateConfigOptions(response)));
-        }),
+        Effect.flatMap((started) =>
+          Ref.get(configOptionsRef).pipe(
+            Effect.flatMap((configOptions) => {
+              const existing = findSessionConfigOption(configOptions, configId);
+              if (existing && configOptionCurrentValueMatches(existing, value)) {
+                return Effect.succeed({
+                  configOptions,
+                } satisfies EffectAcpSchema.SetSessionConfigOptionResponse);
+              }
+              const requestPayload =
+                typeof value === "boolean"
+                  ? ({
+                      sessionId: started.sessionId,
+                      configId,
+                      type: "boolean",
+                      value,
+                    } satisfies EffectAcpSchema.SetSessionConfigOptionRequest)
+                  : ({
+                      sessionId: started.sessionId,
+                      configId,
+                      value: String(value),
+                    } satisfies EffectAcpSchema.SetSessionConfigOptionRequest);
+              return runLoggedRequest(
+                "session/set_config_option",
+                requestPayload,
+                acp.agent.setSessionConfigOption(requestPayload),
+              ).pipe(Effect.tap((response) => updateConfigOptions(response)));
+            }),
+          ),
+        ),
       );
 
     const startOnce = Effect.gen(function* () {
@@ -482,7 +495,7 @@ const makeAcpSessionRuntime = (
       handleExtRequest: acp.handleExtRequest,
       handleExtNotification: acp.handleExtNotification,
       start: () => start,
-      events: Stream.fromQueue(eventQueue),
+      getEvents: () => Stream.fromQueue(eventQueue),
       getModeState: Ref.get(modeStateRef),
       getConfigOptions: Ref.get(configOptionsRef),
       prompt: (payload) =>
@@ -516,7 +529,17 @@ const makeAcpSessionRuntime = (
         Effect.flatMap((started) => acp.agent.cancel({ sessionId: started.sessionId })),
       ),
       setMode: (modeId) =>
-        getStartedState.pipe(Effect.flatMap(() => setConfigOption("mode", modeId))),
+        Ref.get(modeStateRef).pipe(
+          Effect.flatMap((modeState) => {
+            if (modeState?.currentModeId === modeId) {
+              return Effect.succeed({} satisfies EffectAcpSchema.SetSessionModeResponse);
+            }
+            return setConfigOption("mode", modeId).pipe(
+              Effect.tap(() => updateCurrentModeId(modeId)),
+              Effect.as({} satisfies EffectAcpSchema.SetSessionModeResponse),
+            );
+          }),
+        ),
       setConfigOption,
       setModel: (model) =>
         getStartedState.pipe(
@@ -526,7 +549,6 @@ const makeAcpSessionRuntime = (
       request: (method, payload) =>
         runLoggedRequest(method, payload, acp.raw.request(method, payload)),
       notify: acp.raw.notify,
-      close,
     } satisfies AcpSessionRuntimeShape;
   });
 
@@ -538,6 +560,20 @@ function sessionConfigOptionsFromSetup(
     | undefined,
 ): ReadonlyArray<EffectAcpSchema.SessionConfigOption> {
   return response?.configOptions ?? [];
+}
+
+function configOptionCurrentValueMatches(
+  configOption: EffectAcpSchema.SessionConfigOption,
+  value: string | boolean,
+): boolean {
+  const currentValue = configOption.currentValue;
+  if (configOption.type === "boolean") {
+    return currentValue === value;
+  }
+  if (typeof currentValue !== "string") {
+    return false;
+  }
+  return currentValue.trim() === String(value).trim();
 }
 
 const handleSessionUpdate = ({

@@ -333,7 +333,6 @@ export function resolveApiModelId(modelSelection: ModelSelection): string {
     }
   }
 }
-
 export function createModelSelection(
   instanceId: ProviderInstanceId,
   model: string,

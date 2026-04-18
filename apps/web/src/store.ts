@@ -1,7 +1,6 @@
 import type {
   EnvironmentId,
   MessageId,
-  ModelSelection,
   OrchestrationCheckpointSummary,
   OrchestrationEvent,
   OrchestrationLatestTurn,

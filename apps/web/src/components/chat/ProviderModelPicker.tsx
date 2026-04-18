@@ -115,7 +115,6 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
               props.triggerClassName,
             )}
             disabled={props.disabled}
-            title={props.disabled ? props.disabledReason : undefined}
           />
         }
       >

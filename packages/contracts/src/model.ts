@@ -35,7 +35,6 @@ export const CursorModelOptions = Schema.Struct({
   contextWindow: Schema.optional(Schema.String),
 });
 export type CursorModelOptions = typeof CursorModelOptions.Type;
-
 export const OpenCodeModelOptions = Schema.Struct({
   variant: Schema.optional(TrimmedNonEmptyString),
   agent: Schema.optional(TrimmedNonEmptyString),
