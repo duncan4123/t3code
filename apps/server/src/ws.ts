@@ -24,6 +24,9 @@ import {
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetSnapshotError,
   OrchestrationGetTurnDiffError,
+  ORCHESTRATION_V2_WS_METHODS,
+  OrchestrationV2DispatchCommandError,
+  OrchestrationV2GetThreadProjectionError,
   ORCHESTRATION_WS_METHODS,
   ProjectSearchEntriesError,
   ProjectWriteFileError,
@@ -48,6 +51,7 @@ import * as ExternalLauncher from "./process/externalLauncher.ts";
 import { normalizeDispatchCommand } from "./orchestration/Normalizer.ts";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import { OrchestratorV2 } from "./orchestration-v2/Orchestrator.ts";
 import {
   observeRpcEffect,
   observeRpcStream,
@@ -168,6 +172,7 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
       const crypto = yield* Crypto.Crypto;
       const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
       const orchestrationEngine = yield* OrchestrationEngineService;
+      const orchestrationV2 = yield* OrchestratorV2;
       const checkpointDiffQuery = yield* CheckpointDiffQuery;
       const keybindings = yield* Keybindings;
       const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
@@ -854,6 +859,94 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
               );
             }),
             { "rpc.aggregate": "orchestration" },
+          ),
+        [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
+          observeRpcEffect(
+            ORCHESTRATION_V2_WS_METHODS.dispatchCommand,
+            orchestrationV2.dispatch(command).pipe(
+              Effect.map((result) => ({ sequence: result.sequence })),
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationV2DispatchCommandError({
+                    commandId: command.commandId,
+                    commandType: command.type,
+                    message: "Failed to dispatch orchestration V2 command",
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "orchestrationV2" },
+          ),
+        [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_V2_WS_METHODS.getThreadProjection,
+            orchestrationV2.getThreadProjection(input.threadId).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationV2GetThreadProjectionError({
+                    threadId: input.threadId,
+                    message: `Failed to load orchestration V2 thread ${input.threadId}`,
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "orchestrationV2" },
+          ),
+        [ORCHESTRATION_V2_WS_METHODS.subscribeThread]: (input) =>
+          observeRpcStreamEffect(
+            ORCHESTRATION_V2_WS_METHODS.subscribeThread,
+            Effect.gen(function* () {
+              const projection = yield* orchestrationV2.getThreadProjection(input.threadId).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestrationV2GetThreadProjectionError({
+                      threadId: input.threadId,
+                      message: `Failed to load orchestration V2 thread ${input.threadId}`,
+                      cause,
+                    }),
+                ),
+              );
+              const snapshotSequence = yield* orchestrationV2
+                .getThreadEventSequence(input.threadId)
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new OrchestrationV2GetThreadProjectionError({
+                        threadId: input.threadId,
+                        message: `Failed to load orchestration V2 sequence for thread ${input.threadId}`,
+                        cause,
+                      }),
+                  ),
+                );
+
+              const liveStream = orchestrationV2.streamStoredEvents.pipe(
+                Stream.filter((stored) => stored.event.threadId === input.threadId),
+                Stream.filter((stored) => stored.sequence > snapshotSequence),
+                Stream.map((stored) => ({
+                  kind: "event" as const,
+                  sequence: stored.sequence,
+                  event: stored.event,
+                })),
+                Stream.mapError(
+                  (cause) =>
+                    new OrchestrationV2GetThreadProjectionError({
+                      threadId: input.threadId,
+                      message: `Failed while streaming orchestration V2 thread ${input.threadId}`,
+                      cause,
+                    }),
+                ),
+              );
+
+              return Stream.concat(
+                Stream.make({
+                  kind: "snapshot" as const,
+                  snapshotSequence,
+                  projection,
+                }),
+                liveStream,
+              );
+            }),
+            { "rpc.aggregate": "orchestrationV2" },
           ),
         [WS_METHODS.serverGetConfig]: (_input) =>
           observeRpcEffect(WS_METHODS.serverGetConfig, loadServerConfig, {

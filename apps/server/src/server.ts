@@ -89,8 +89,7 @@ import {
   orchestrationDispatchRouteLayer,
   orchestrationSnapshotRouteLayer,
 } from "./orchestration/http.ts";
-import * as NetService from "@t3tools/shared/Net";
-import { disableTailscaleServe, ensureTailscaleServe } from "@t3tools/tailscale";
+import { OrchestrationV2LayerLive } from "./orchestration-v2/runtimeLayer.ts";
 
 const PtyAdapterLive = Layer.unwrap(
   Effect.gen(function* () {
@@ -238,6 +237,13 @@ const WorkspaceLayerLive = Layer.mergeAll(
   WorkspaceFileSystemLayerLive,
 );
 
+const OrchestrationV2RuntimeLayerLive = OrchestrationV2LayerLive.pipe(
+  Layer.provide(CheckpointStoreLive),
+  Layer.provide(GitCoreLive),
+  Layer.provide(PersistenceLayerLive),
+  Layer.provide(ServerSettingsLive),
+);
+
 const AuthLayerLive = ServerAuthLive.pipe(
   Layer.provideMerge(PersistenceLayerLive),
   Layer.provide(ServerSecretStoreLive),
@@ -283,7 +289,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(RepositoryIdentityResolverLive),
   Layer.provideMerge(ServerEnvironmentLive),
   Layer.provideMerge(AuthLayerLive),
-);
+  Layer.provideMerge(OrchestrationV2RuntimeLayerLive),
 
 const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(
   // Misc.

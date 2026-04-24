@@ -10,12 +10,15 @@ import {
   GitCommandError,
   KeybindingRule,
   MessageId,
-  ExternalLauncherError,
+  OpenError,
+  ORCHESTRATION_V2_WS_METHODS,
   type OrchestrationThreadShell,
   TerminalNotRunningError,
   type OrchestrationCommand,
   type OrchestrationEvent,
+  type OrchestrationV2ThreadStreamItem,
   ORCHESTRATION_WS_METHODS,
+  type ProviderKind,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -40,7 +43,20 @@ import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import {
-  Cookies,
+  Deferred,
+  Duration,
+  Effect,
+  FileSystem,
+  Fiber,
+  Layer,
+  ManagedRuntime,
+  Option,
+  Path,
+  Queue,
+  Schema,
+  Stream,
+} from "effect";
+import {
   FetchHttpClient,
   HttpBody,
   HttpClient,
@@ -51,6 +67,7 @@ import { OtlpSerialization, OtlpTracer } from "effect/unstable/observability";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import * as Socket from "effect/unstable/socket/Socket";
 import { vi } from "vitest";
+import { readFile } from "node:fs/promises";
 
 const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
 
@@ -69,6 +86,17 @@ import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
 } from "./orchestration/Services/OrchestrationEngine.ts";
+import {
+  OrchestratorV2,
+  layerUnavailable as OrchestratorV2Unavailable,
+} from "./orchestration-v2/Orchestrator.ts";
+import { CodexOrchestratorReplayHarness } from "./orchestration-v2/Adapters/CodexAdapterV2.testkit.ts";
+import { layer as idAllocatorV2Layer } from "./orchestration-v2/IdAllocator.ts";
+import { provideDeterministicTestRuntime } from "./orchestration-v2/testkit/DeterministicRuntime.ts";
+import { ORCHESTRATOR_REPLAY_FIXTURES } from "./orchestration-v2/testkit/fixtures/index.ts";
+import { materializeFixtureInput } from "./orchestration-v2/testkit/fixtures/shared.ts";
+import { makeOrchestratorV2ProviderReplayLayer } from "./orchestration-v2/testkit/ProviderReplayHarness.ts";
+import { decodeProviderReplayNdjson } from "./orchestration-v2/testkit/ReplayTranscriptNdjson.ts";
 import { OrchestrationListenerCallbackError } from "./orchestration/Errors.ts";
 import {
   ProjectionSnapshotQuery,
@@ -340,6 +368,7 @@ const buildAppUnderTest = (options?: {
     serverRuntimeStartup?: Partial<ServerRuntimeStartupShape>;
     serverEnvironment?: Partial<ServerEnvironmentShape>;
     repositoryIdentityResolver?: Partial<RepositoryIdentityResolverShape>;
+    orchestratorV2?: Layer.Layer<OrchestratorV2, never, never>;
   };
 }) =>
   Effect.gen(function* () {
@@ -677,6 +706,7 @@ const buildAppUnderTest = (options?: {
           ...options?.layers?.projectionSnapshotQuery,
         }),
       ),
+      Layer.provide(options?.layers?.orchestratorV2 ?? OrchestratorV2Unavailable),
       Layer.provide(
         Layer.mock(CheckpointDiffQuery)({
           getTurnDiff: () =>
@@ -780,10 +810,53 @@ const makeWsRpcClient = RpcClient.make(WsRpcGroup);
 type WsRpcClient =
   typeof makeWsRpcClient extends Effect.Effect<infer Client, any, any> ? Client : never;
 
+class WsRpcTestTimeoutError extends Schema.TaggedErrorClass<WsRpcTestTimeoutError>()(
+  "WsRpcTestTimeoutError",
+  {
+    label: Schema.String,
+    cause: Schema.optional(Schema.Defect),
+  },
+) {
+  override get message(): string {
+    return `Timed out waiting for ${this.label}.`;
+  }
+}
+
 const withWsRpcClient = <A, E, R>(
   wsUrl: string,
   f: (client: WsRpcClient) => Effect.Effect<A, E, R>,
 ) => makeWsRpcClient.pipe(Effect.flatMap(f), Effect.provide(wsRpcProtocolLayer(wsUrl)));
+
+const ORCHESTRATION_V2_REPLAY_HARNESSES = [CodexOrchestratorReplayHarness] as const;
+
+function orchestrationV2ReplayHarnessFor(provider: ProviderKind) {
+  const harness = ORCHESTRATION_V2_REPLAY_HARNESSES.find(
+    (candidate) => candidate.provider === provider,
+  );
+  if (!harness) {
+    throw new Error(`No orchestration V2 replay harness registered for ${provider}.`);
+  }
+  return harness;
+}
+
+const readProviderReplayTranscript = (file: URL) =>
+  Effect.promise(() => readFile(file, "utf8")).pipe(Effect.flatMap(decodeProviderReplayNdjson));
+
+const takeWsItem = <A>(queue: Queue.Queue<A>, label: string) =>
+  Queue.take(queue).pipe(
+    Effect.raceFirst(
+      Effect.tryPromise({
+        try: () =>
+          new Promise<never>((_resolve, reject) => {
+            setTimeout(() => reject(new WsRpcTestTimeoutError({ label })), 5_000);
+          }),
+        catch: (cause) =>
+          Schema.is(WsRpcTestTimeoutError)(cause)
+            ? cause
+            : new WsRpcTestTimeoutError({ label, cause }),
+      }),
+    ),
+  );
 
 const appendSessionCookieToWsUrl = (url: string, sessionCookieHeader: string) => {
   const isAbsoluteUrl = /^[a-zA-Z][a-zA-Z\d+.-]*:/.test(url);
@@ -3285,31 +3358,122 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("routes websocket rpc orchestration shell snapshot errors", () =>
+  it.effect("streams orchestration V2 replay output over websocket rpc", () =>
     Effect.gen(function* () {
-      const projectionError = new PersistenceSqlError({
-        operation: "ProjectionSnapshotQuery.getShellSnapshot:test",
-        detail: "failed to read projection shell snapshot",
-      });
+      const fixture = ORCHESTRATOR_REPLAY_FIXTURES.find((candidate) => candidate.name === "simple");
+      if (!fixture) {
+        throw new Error("Missing simple orchestration V2 replay fixture.");
+      }
+      const provider = fixture.providers.find((candidate) => candidate.provider === "codex");
+      if (!provider) {
+        throw new Error("Missing Codex provider variant for simple orchestration V2 fixture.");
+      }
+
+      const harness = orchestrationV2ReplayHarnessFor(provider.provider);
+      const rawTranscript = yield* readProviderReplayTranscript(provider.transcriptFile);
+      const transcript = yield* harness.decodeTranscript(rawTranscript);
+      const materialized = yield* materializeFixtureInput({
+        scenario: fixture.name,
+        fixtureInput: fixture.buildInput(),
+        modelSelection: provider.modelSelection,
+      }).pipe(Effect.provide(idAllocatorV2Layer), provideDeterministicTestRuntime);
+      const scenario = {
+        name: `${fixture.name}/${provider.provider}/ws`,
+        transcript,
+        commands: materialized.commands,
+        steps: materialized.steps,
+        projectionThreadIds: materialized.projectionThreadIds,
+      };
+      const [createThreadCommand, dispatchMessageCommand] = materialized.commands;
+      if (createThreadCommand?.type !== "thread.create") {
+        throw new Error("Expected first simple fixture command to create a thread.");
+      }
+      if (dispatchMessageCommand?.type !== "message.dispatch") {
+        throw new Error("Expected second simple fixture command to dispatch a message.");
+      }
+
       yield* buildAppUnderTest({
         layers: {
-          projectionSnapshotQuery: {
-            getShellSnapshot: () => Effect.fail(projectionError),
-          },
+          orchestratorV2: makeOrchestratorV2ProviderReplayLayer(scenario, harness).pipe(
+            Layer.orDie,
+          ),
         },
       });
 
       const wsUrl = yield* getWsServerUrl("/ws");
-      const result = yield* Effect.scoped(
+      const received = yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
-          client[ORCHESTRATION_WS_METHODS.subscribeShell]({}).pipe(Stream.runCollect),
-        ).pipe(Effect.result),
+          Effect.gen(function* () {
+            const createResult =
+              yield* client[ORCHESTRATION_V2_WS_METHODS.dispatchCommand](createThreadCommand);
+            const duplicateCreateResult =
+              yield* client[ORCHESTRATION_V2_WS_METHODS.dispatchCommand](createThreadCommand);
+            assert.equal(duplicateCreateResult.sequence, createResult.sequence);
+
+            const streamItems = yield* Queue.unbounded<OrchestrationV2ThreadStreamItem>();
+            const streamFiber = yield* client[ORCHESTRATION_V2_WS_METHODS.subscribeThread]({
+              threadId: createThreadCommand.threadId,
+            }).pipe(
+              Stream.runForEach((item) => Queue.offer(streamItems, item)),
+              Effect.forkDetach,
+            );
+
+            const snapshot = yield* takeWsItem(streamItems, "orchestration V2 snapshot");
+            assert.equal(snapshot.kind, "snapshot");
+            if (snapshot.kind === "snapshot") {
+              assert.equal(snapshot.projection.thread.id, createThreadCommand.threadId);
+              assert.equal(snapshot.snapshotSequence, createResult.sequence);
+              assert.deepEqual(
+                snapshot.projection.turnItems.map((item) => item.type),
+                [],
+              );
+            }
+
+            yield* client[ORCHESTRATION_V2_WS_METHODS.dispatchCommand](dispatchMessageCommand);
+
+            const items: Array<OrchestrationV2ThreadStreamItem> = [];
+            const turnItemTypes = new Set<string>();
+            for (let index = 0; index < 20; index += 1) {
+              const item = yield* takeWsItem(streamItems, `orchestration V2 event ${index + 1}`);
+              items.push(item);
+              if (item.kind === "event") {
+                assert.isAbove(item.sequence, createResult.sequence);
+              }
+              if (item.kind === "event" && item.event.type === "turn-item.updated") {
+                turnItemTypes.add(item.event.payload.type);
+              }
+              if (turnItemTypes.has("user_message") && turnItemTypes.has("assistant_message")) {
+                break;
+              }
+            }
+
+            const projection = yield* client[ORCHESTRATION_V2_WS_METHODS.getThreadProjection]({
+              threadId: createThreadCommand.threadId,
+            });
+            yield* Fiber.interrupt(streamFiber);
+
+            return { items, projection };
+          }),
+        ),
       );
 
-      assertTrue(result._tag === "Failure");
-      assertTrue(result.failure._tag === "OrchestrationGetSnapshotError");
-      assertTrue(result.failure.cause instanceof Error);
-      assert.include(result.failure.cause.message, projectionError.message);
+      const streamedTurnItems = received.items.flatMap((item) =>
+        item.kind === "event" && item.event.type === "turn-item.updated"
+          ? [item.event.payload]
+          : [],
+      );
+      assert.deepEqual(
+        streamedTurnItems.map((item) => item.type),
+        ["user_message", "assistant_message"],
+      );
+      assert.deepEqual(
+        received.projection.turnItems.map((item) => item.type),
+        ["user_message", "assistant_message"],
+      );
+      assert.equal(
+        received.projection.turnItems.find((item) => item.type === "assistant_message")?.text,
+        "fixture simple ok",
+      );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
