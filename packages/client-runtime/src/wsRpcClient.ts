@@ -23,6 +23,7 @@ type RpcInput<TTag extends RpcTag> = Parameters<RpcMethod<TTag>>[0];
 
 interface StreamSubscriptionOptions {
   readonly onResubscribe?: () => void;
+  readonly onError?: (message: string) => void;
 }
 
 function subscriptionOptions(
@@ -166,6 +167,7 @@ export interface WsRpcClient {
     readonly getThreadProjection: RpcUnaryMethod<
       typeof ORCHESTRATION_V2_WS_METHODS.getThreadProjection
     >;
+    readonly subscribeShell: RpcStreamMethod<typeof ORCHESTRATION_V2_WS_METHODS.subscribeShell>;
     readonly subscribeThread: RpcInputStreamMethod<
       typeof ORCHESTRATION_V2_WS_METHODS.subscribeThread
     >;
@@ -360,6 +362,12 @@ export function createWsRpcClient(
       getThreadProjection: (input) =>
         transport.request((client) =>
           client[ORCHESTRATION_V2_WS_METHODS.getThreadProjection](input),
+        ),
+      subscribeShell: (listener, options) =>
+        transport.subscribe(
+          (client) => client[ORCHESTRATION_V2_WS_METHODS.subscribeShell]({}),
+          listener,
+          options,
         ),
       subscribeThread: (input, listener, options) =>
         transport.subscribe(
