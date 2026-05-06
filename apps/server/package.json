@@ -18,6 +18,8 @@
     "dev": "node --watch src/bin.ts",
     "build": "node scripts/cli.ts build",
     "build:bundle": "tsdown",
+    "record:codex-replay": "bun scripts/record-codex-app-server-replay-fixture.ts",
+    "record:claude-replay": "bun scripts/record-claude-agent-sdk-replay-fixture.ts",
     "start": "node dist/bin.mjs",
     "typecheck": "tsgo --noEmit",
     "test": "vitest run"
