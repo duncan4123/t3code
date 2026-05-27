@@ -1,13 +1,21 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
-import { CommandId, ProjectId, ThreadId } from "@t3tools/contracts";
-import { Effect, Layer } from "effect";
+import {
+  CommandId,
+  type ModelSelection,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 
 import { CheckpointStoreLive } from "../checkpointing/Layers/CheckpointStore.ts";
 import { ServerConfig } from "../config.ts";
-import { GitCoreLive } from "../git/Layers/GitCore.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
+import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
+import * as VcsProcess from "../vcs/VcsProcess.ts";
 import { OrchestratorV2 } from "./Orchestrator.ts";
 import { OrchestrationV2LayerLive } from "./runtimeLayer.ts";
 
@@ -15,14 +23,19 @@ const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-orchestration-v2-runtime-layer-",
 });
 
-const GitCoreTestLayer = GitCoreLive.pipe(
+const modelSelection = {
+  instanceId: ProviderInstanceId.make("codex"),
+  model: "gpt-5.4",
+} satisfies ModelSelection;
+
+const VcsDriverRegistryTestLayer = VcsDriverRegistry.layer.pipe(
+  Layer.provide(VcsProcess.layer),
   Layer.provide(ServerConfigLayer),
   Layer.provide(NodeServices.layer),
 );
 
 const CheckpointStoreTestLayer = CheckpointStoreLive.pipe(
-  Layer.provide(GitCoreTestLayer),
-  Layer.provide(NodeServices.layer),
+  Layer.provide(VcsDriverRegistryTestLayer),
 );
 
 const TestLayer = OrchestrationV2LayerLive.pipe(
@@ -46,10 +59,7 @@ it.layer(TestLayer)("OrchestrationV2LayerLive", (it) => {
         threadId,
         projectId,
         title: "Runtime layer thread",
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5.4",
-        },
+        modelSelection: modelSelection,
         runtimeMode: "full-access",
         interactionMode: "default",
         branch: null,

@@ -21,20 +21,18 @@ import type {
 } from "@t3tools/contracts";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexSchema from "effect-codex-app-server/schema";
-import {
-  Context,
-  DateTime,
-  Deferred,
-  Effect,
-  FileSystem,
-  Layer,
-  Path,
-  Queue,
-  Ref,
-  Schema,
-  Scope,
-  Stream,
-} from "effect";
+import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
+import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
@@ -70,6 +68,7 @@ import {
   type ProviderAdapterV2Shape,
   type ProviderAdapterV2Event,
   type ProviderAdapterV2ForkThreadInput,
+  type ProviderAdapterV2RollbackThreadInput,
   type ProviderAdapterV2RuntimePolicy,
   type ProviderAdapterV2SessionRuntime,
   type ProviderAdapterV2SteerInput,
@@ -194,7 +193,7 @@ function normalizeCodexCause(error: unknown): unknown {
 function codexTimestamp(seconds: number | null | undefined): DateTime.Utc {
   return seconds === null || seconds === undefined
     ? DateTime.nowUnsafe()
-    : DateTime.fromDateUnsafe(new Date(seconds * 1000));
+    : DateTime.makeUnsafe(seconds * 1000);
 }
 
 function mapCodexTurnStatus(
@@ -495,6 +494,7 @@ function providerThreadFromCodexThread(input: {
       nativeId: input.thread.id,
       strength: "strong" as const,
     },
+    nativeConversationHeadRef: null,
     status: "idle",
     firstRunOrdinal: null,
     lastRunOrdinal: null,
@@ -511,17 +511,37 @@ const isTerminalProviderTurn = (turn: OrchestrationV2ProviderTurn): boolean =>
   turn.status === "failed" ||
   turn.status === "cancelled";
 
+const providerTurnsForThread = (
+  providerTurns: ReadonlyArray<OrchestrationV2ProviderTurn>,
+  providerThread: OrchestrationV2ProviderThread,
+): ReadonlyArray<OrchestrationV2ProviderTurn> =>
+  providerTurns.filter((turn) => turn.providerThreadId === providerThread.id);
+
+const countTerminalTurnsAfterBoundary = (
+  providerTurns: ReadonlyArray<OrchestrationV2ProviderTurn>,
+  providerTurnId: ProviderTurnId,
+): number | null => {
+  const boundaryTurn = providerTurns.find((turn) => turn.id === providerTurnId);
+  if (boundaryTurn === undefined) {
+    return null;
+  }
+
+  return providerTurns.filter(
+    (turn) => turn.ordinal > boundaryTurn.ordinal && isTerminalProviderTurn(turn),
+  ).length;
+};
+
 const resolveCodexForkRollbackTurnCount = Effect.fn("CodexAdapterV2.resolveForkRollbackTurnCount")(
   function* (input: ProviderAdapterV2ForkThreadInput) {
     if (input.providerTurnId === undefined || input.sourceProviderTurns === undefined) {
       return 0;
     }
 
-    const sourceTurns = input.sourceProviderTurns
-      .filter((turn) => turn.providerThreadId === input.sourceProviderThread.id)
-      .toSorted((left, right) => left.ordinal - right.ordinal);
-    const boundaryIndex = sourceTurns.findIndex((turn) => turn.id === input.providerTurnId);
-    if (boundaryIndex < 0) {
+    const rollbackTurnCount = countTerminalTurnsAfterBoundary(
+      providerTurnsForThread(input.sourceProviderTurns, input.sourceProviderThread),
+      input.providerTurnId,
+    );
+    if (rollbackTurnCount === null) {
       return yield* new ProviderAdapterForkThreadError({
         provider: CODEX_PROVIDER,
         providerThreadId: input.sourceProviderThread.id,
@@ -529,7 +549,40 @@ const resolveCodexForkRollbackTurnCount = Effect.fn("CodexAdapterV2.resolveForkR
       });
     }
 
-    return sourceTurns.slice(boundaryIndex + 1).filter(isTerminalProviderTurn).length;
+    return rollbackTurnCount;
+  },
+);
+
+export const resolveCodexRollbackTurnCount = Effect.fn("CodexAdapterV2.resolveRollbackTurnCount")(
+  function* (input: ProviderAdapterV2RollbackThreadInput) {
+    const providerTurns = input.providerThreadTurns;
+    switch (input.target.type) {
+      case "thread_start":
+        return providerTurns.filter(isTerminalProviderTurn).length;
+      case "provider_turn": {
+        if (input.target.providerTurn.providerThreadId !== input.providerThread.id) {
+          return yield* new ProviderAdapterRollbackThreadError({
+            provider: CODEX_PROVIDER,
+            providerThreadId: input.providerThread.id,
+            cause: `Cannot roll back Codex thread ${input.providerThread.id} to provider turn ${input.target.providerTurn.id}: target turn belongs to provider thread ${input.target.providerTurn.providerThreadId}.`,
+          });
+        }
+
+        const rollbackTurnCount = countTerminalTurnsAfterBoundary(
+          providerTurns,
+          input.target.providerTurn.id,
+        );
+        if (rollbackTurnCount === null) {
+          return yield* new ProviderAdapterRollbackThreadError({
+            provider: CODEX_PROVIDER,
+            providerThreadId: input.providerThread.id,
+            cause: `Cannot roll back Codex thread ${input.providerThread.id} to provider turn ${input.target.providerTurn.id}: target turn was not found in durable provider turn history.`,
+          });
+        }
+
+        return rollbackTurnCount;
+      }
+    }
   },
 );
 
@@ -1008,6 +1061,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                   nativeId: nativeThreadId,
                   strength: "strong" as const,
                 },
+                nativeConversationHeadRef: null,
                 status: "idle" as const,
                 firstRunOrdinal: input.context.input.runOrdinal,
                 lastRunOrdinal: input.context.input.runOrdinal,
@@ -2468,6 +2522,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                   nativeId: response.thread.id,
                   strength: "strong",
                 },
+                nativeConversationHeadRef: threadInput.providerThread.nativeConversationHeadRef,
                 updatedAt: codexTimestamp(response.thread.updatedAt),
               } satisfies OrchestrationV2ProviderThread;
             }).pipe(
@@ -2666,6 +2721,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                     nativeId: response.thread.id,
                     strength: "strong" as const,
                   },
+                  nativeConversationHeadRef: threadInput.providerThread.nativeConversationHeadRef,
                   updatedAt: codexTimestamp(response.thread.updatedAt),
                 },
                 providerTurns: [],
@@ -2686,13 +2742,23 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           rollbackThread: (threadInput) =>
             Effect.gen(function* () {
               const threadId = yield* getNativeThreadId(threadInput.providerThread);
-              const numTurns =
-                typeof threadInput.providerPayload === "object" &&
-                threadInput.providerPayload !== null &&
-                "numTurns" in threadInput.providerPayload &&
-                typeof threadInput.providerPayload.numTurns === "number"
-                  ? threadInput.providerPayload.numTurns
-                  : 1;
+              const numTurns = yield* resolveCodexRollbackTurnCount(threadInput);
+              const nativeConversationHeadRef =
+                threadInput.target.type === "provider_turn"
+                  ? threadInput.target.providerTurn.nativeTurnRef
+                  : null;
+              if (numTurns === 0) {
+                return {
+                  providerThread: {
+                    ...threadInput.providerThread,
+                    nativeConversationHeadRef,
+                    status: "idle" as const,
+                  },
+                  providerTurns: [],
+                  messages: [],
+                  runtimeRequests: [],
+                };
+              }
               const response = yield* ensureInitialized.pipe(
                 Effect.andThen(client.request("thread/rollback", { threadId, numTurns })),
               );
@@ -2704,6 +2770,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                     nativeId: response.thread.id,
                     strength: "strong" as const,
                   },
+                  nativeConversationHeadRef,
                   status: "idle" as const,
                   updatedAt: codexTimestamp(response.thread.updatedAt),
                 },
