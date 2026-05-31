@@ -9,12 +9,15 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import { fromJsonStringPretty } from "@t3tools/shared/schemaJson";
 
 import { writeFileStringAtomically } from "../atomicWrite.ts";
 
 const decodeProviderStatusCache = Schema.decodeUnknownEffect(
   Schema.fromJsonString(ServerProviderSchema),
 );
+const ProviderStatusCacheJson = fromJsonStringPretty(ServerProviderSchema);
+const encodeProviderStatusCache = Schema.encodeEffect(ProviderStatusCacheJson);
 
 const mergeProviderModels = (
   fallbackModels: ReadonlyArray<ServerProvider["models"][number]>,
@@ -146,8 +149,11 @@ export const writeProviderStatusCache = (input: {
   readonly provider: ServerProvider;
 }) => {
   const { updateState: _updateState, ...cacheableProvider } = input.provider;
-  return writeFileStringAtomically({
-    filePath: input.filePath,
-    contents: `${JSON.stringify(cacheableProvider, null, 2)}\n`,
+  return Effect.gen(function* () {
+    const contents = yield* encodeProviderStatusCache(cacheableProvider);
+    yield* writeFileStringAtomically({
+      filePath: input.filePath,
+      contents: `${contents}\n`,
+    });
   });
 };
