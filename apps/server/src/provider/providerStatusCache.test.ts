@@ -54,6 +54,8 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
           status: "queued",
           startedAt: null,
           finishedAt: null,
+          message: null,
+          output: null,
         },
       });
       const openCodeProvider = makeProvider(OPENCODE_DRIVER, {
