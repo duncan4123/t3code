@@ -13,14 +13,13 @@ import {
 } from "@opencode-ai/sdk/v2";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
-import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as P from "effect/Predicate";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Scope from "effect/Scope";
@@ -35,7 +34,7 @@ const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.UnknownFromJ
 const OPENCODE_EMPTY_CONFIG_CONTENT = "{}";
 
 const OPENCODE_SERVER_READY_PREFIX = "opencode server listening";
-const DEFAULT_OPENCODE_SERVER_TIMEOUT_MS = 5_000;
+const DEFAULT_OPENCODE_SERVER_TIMEOUT = Duration.seconds(5);
 const DEFAULT_HOSTNAME = "127.0.0.1";
 export interface OpenCodeServerProcess {
   readonly url: string;
@@ -48,15 +47,19 @@ export interface OpenCodeServerConnection {
   readonly external: boolean;
 }
 
-const OPENCODE_RUNTIME_ERROR_TAG = "OpenCodeRuntimeError";
-export class OpenCodeRuntimeError extends Data.TaggedError(OPENCODE_RUNTIME_ERROR_TAG)<{
-  readonly operation: string;
-  readonly cause?: unknown;
-  readonly detail: string;
-}> {
-  static readonly is = (u: unknown): u is OpenCodeRuntimeError =>
-    P.isTagged(u, OPENCODE_RUNTIME_ERROR_TAG);
+export class OpenCodeRuntimeError extends Schema.TaggedErrorClass<OpenCodeRuntimeError>()(
+  "OpenCodeRuntimeError",
+  {
+    operation: Schema.String,
+    detail: Schema.String,
+    cause: Schema.optional(Schema.Defect),
+  },
+) {
+  override get message() {
+    return this.detail;
+  }
 }
+export const isOpenCodeRuntimeError = Schema.is(OpenCodeRuntimeError);
 
 function encodeJsonStringForDiagnostics(input: unknown): string | undefined {
   const result = encodeUnknownJsonStringExit(input);
@@ -64,7 +67,7 @@ function encodeJsonStringForDiagnostics(input: unknown): string | undefined {
 }
 
 export function openCodeRuntimeErrorDetail(cause: unknown): string {
-  if (OpenCodeRuntimeError.is(cause)) return cause.detail;
+  if (isOpenCodeRuntimeError(cause)) return cause.detail;
   if (cause instanceof Error && cause.message.trim().length > 0) return cause.message.trim();
   if (cause && typeof cause === "object") {
     // SDK v2 throws { response, request, error? } shapes — extract what's useful
@@ -117,7 +120,7 @@ export interface OpenCodeRuntimeShape {
     readonly environment?: NodeJS.ProcessEnv;
     readonly port?: number;
     readonly hostname?: string;
-    readonly timeoutMs?: number;
+    readonly timeout?: Duration.Input;
   }) => Effect.Effect<OpenCodeServerProcess, OpenCodeRuntimeError, Scope.Scope>;
   /**
    * Returns a handle to either an externally-managed OpenCode server (when
@@ -130,7 +133,7 @@ export interface OpenCodeRuntimeShape {
     readonly environment?: NodeJS.ProcessEnv;
     readonly port?: number;
     readonly hostname?: string;
-    readonly timeoutMs?: number;
+    readonly timeout?: Duration.Input;
   }) => Effect.Effect<OpenCodeServerConnection, OpenCodeRuntimeError, Scope.Scope>;
   readonly runOpenCodeCommand: (input: {
     readonly binaryPath: string;
@@ -268,7 +271,7 @@ function ensureRuntimeError(
   detail: string,
   cause: unknown,
 ): OpenCodeRuntimeError {
-  return OpenCodeRuntimeError.is(cause)
+  return isOpenCodeRuntimeError(cause)
     ? cause
     : new OpenCodeRuntimeError({ operation, detail, cause });
 }
@@ -332,7 +335,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
               }),
           ),
         ));
-      const timeoutMs = input.timeoutMs ?? DEFAULT_OPENCODE_SERVER_TIMEOUT_MS;
+      const timeout = Duration.fromInputUnsafe(input.timeout ?? DEFAULT_OPENCODE_SERVER_TIMEOUT);
       const args = ["serve", `--hostname=${hostname}`, `--port=${port}`];
 
       const child = yield* spawner
@@ -431,7 +434,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       );
 
       const readyExit = yield* Effect.exit(
-        Deferred.await(readyDeferred).pipe(Effect.timeoutOption(timeoutMs)),
+        Deferred.await(readyDeferred).pipe(Effect.timeoutOption(timeout)),
       );
 
       // Startup-time fibers are no longer needed once ready has resolved (either
@@ -455,7 +458,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
         yield* Fiber.interrupt(exitFiber).pipe(Effect.ignore);
         return yield* new OpenCodeRuntimeError({
           operation: "startOpenCodeServerProcess",
-          detail: `Timed out waiting for OpenCode server start after ${timeoutMs}ms.`,
+          detail: `Timed out waiting for OpenCode server start after ${Duration.format(timeout)}.`,
         });
       }
 
@@ -484,7 +487,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       ...(input.environment !== undefined ? { environment: input.environment } : {}),
       ...(input.port !== undefined ? { port: input.port } : {}),
       ...(input.hostname !== undefined ? { hostname: input.hostname } : {}),
-      ...(input.timeoutMs !== undefined ? { timeoutMs: input.timeoutMs } : {}),
+      ...(input.timeout !== undefined ? { timeout: input.timeout } : {}),
     }).pipe(
       Effect.map((server) => ({
         url: server.url,

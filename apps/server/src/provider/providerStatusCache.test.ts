@@ -50,6 +50,11 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
       const claudeProvider = makeProvider(CLAUDE_AGENT_DRIVER, {
         status: "warning",
         auth: { status: "unknown" },
+        updateState: {
+          status: "queued",
+          startedAt: null,
+          finishedAt: null,
+        },
       });
       const openCodeProvider = makeProvider(OPENCODE_DRIVER, {
         status: "warning",
@@ -81,9 +86,13 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
         provider: openCodeProvider,
       });
 
+      const { updateState: _updateState, ...cacheableClaudeProvider } = claudeProvider;
       assert.deepStrictEqual(yield* readProviderStatusCache(codexPath), codexProvider);
-      assert.deepStrictEqual(yield* readProviderStatusCache(claudePath), claudeProvider);
+      assert.deepStrictEqual(yield* readProviderStatusCache(claudePath), cacheableClaudeProvider);
       assert.deepStrictEqual(yield* readProviderStatusCache(openCodePath), openCodeProvider);
+
+      const claudeCacheContents = yield* fs.readFileString(claudePath);
+      assert.strictEqual(claudeCacheContents.includes("updateState"), false);
     }),
   );
 
