@@ -827,11 +827,7 @@ export const CodexAdapterV2Driver: ProviderAdapterDriver<CodexSettings, CodexAda
     }),
 };
 
-export const layer: Layer.Layer<
-  ProviderAdapterV2,
-  never,
-  CodexAppServerClientFactory | FileSystem.FileSystem | IdAllocatorV2 | ServerConfig
-> = Layer.effect(
+export const layer = Layer.effect(
   ProviderAdapterV2,
   Effect.gen(function* () {
     const clientFactory = yield* CodexAppServerClientFactory;
@@ -841,7 +837,7 @@ export const layer: Layer.Layer<
 
     return makeCodexAdapterV2({
       instanceId: CODEX_DEFAULT_INSTANCE_ID,
-      settings: Schema.decodeSync(CodexSettings)({}),
+      settings: yield* Schema.decodeUnknownEffect(CodexSettings)({}),
       environment: process.env,
       clientFactory,
       fileSystem,

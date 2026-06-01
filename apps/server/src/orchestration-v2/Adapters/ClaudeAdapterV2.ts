@@ -2969,8 +2969,4 @@ const makeDefaultClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2.layer")(function* 
   });
 });
 
-export const layer: Layer.Layer<
-  ProviderAdapterV2,
-  never,
-  ClaudeAgentSdkQueryRunner | IdAllocatorV2
-> = Layer.effect(ProviderAdapterV2, makeDefaultClaudeAdapterV2());
+export const layer = Layer.effect(ProviderAdapterV2, makeDefaultClaudeAdapterV2());
