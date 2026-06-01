@@ -89,14 +89,6 @@ const runtimeMock = {
   },
 };
 
-function toGlobalEvent(event: unknown, directory: string): unknown {
-  return event && typeof event === "object" && "payload" in event
-    ? event
-    : {
-        directory,
-        payload: event,
-      };
-}
 
 const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
   startOpenCodeServerProcess: ({ binaryPath }) =>
@@ -175,29 +167,6 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
             targetIndex >= 0
               ? runtimeMock.state.messages.slice(0, targetIndex + 1)
               : runtimeMock.state.messages;
-        },
-      },
-      global: {
-        event: async (options?: { signal?: AbortSignal }) => {
-          runtimeMock.state.globalEventCalls += 1;
-          return {
-            stream: (async function* () {
-              let index = 0;
-              while (!options?.signal?.aborted) {
-                if (index < runtimeMock.state.subscribedEvents.length) {
-                  yield toGlobalEvent(
-                    runtimeMock.state.subscribedEvents[index++],
-                    runtimeMock.state.subscribedEventDirectory,
-                  );
-                  continue;
-                }
-                if (!runtimeMock.state.keepSubscriptionOpen) {
-                  break;
-                }
-                await Effect.runPromise(Effect.sleep("5 millis"));
-              }
-            })(),
-          };
         },
       },
       event: {
