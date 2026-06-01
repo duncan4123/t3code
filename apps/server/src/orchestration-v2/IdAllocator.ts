@@ -23,7 +23,7 @@ import {
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Crypto from "effect/Crypto";
+import { randomUUID } from "node:crypto";
 import * as Schema from "effect/Schema";
 
 export const IdAllocatorV2Kind = Schema.Literals([
@@ -186,7 +186,7 @@ const randomId =
     readonly make: (value: string) => Id;
   }) =>
   (allocationInput: Input): Effect.Effect<Id, IdAllocatorV2Error> =>
-    Crypto.randomUUIDv4.pipe(
+    Effect.sync(() => randomUUID()).pipe(
       Effect.map((uuid) => input.make(joinId(input.prefix, ...input.parts, uuid))),
       Effect.mapError(
         (cause) =>

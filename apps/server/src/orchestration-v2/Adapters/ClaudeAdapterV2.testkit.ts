@@ -17,7 +17,7 @@ import {
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Crypto from "effect/Crypto";
+import { randomUUID } from "node:crypto";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
@@ -2034,7 +2034,7 @@ export async function recordClaudeAgentSdkReplayTranscript(input: {
   }
 
   const entries: Array<ProviderReplayEntry> = [];
-  const sessionId = input.sessionId ?? (await Effect.runPromise(Crypto.randomUUIDv4));
+  const sessionId = input.sessionId ?? randomUUID();
   const queryMode = input.queryMode ?? "streaming";
   const recordingMetadata: Record<string, unknown> = {};
   if (queryMode === "streaming") {
