@@ -89,7 +89,6 @@ const runtimeMock = {
   },
 };
 
-
 const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
   startOpenCodeServerProcess: ({ binaryPath }) =>
     Effect.gen(function* () {
