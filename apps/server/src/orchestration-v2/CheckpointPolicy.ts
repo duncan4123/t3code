@@ -81,4 +81,4 @@ export interface CheckpointPolicyV2Shape {
 export class CheckpointPolicyV2 extends Context.Service<
   CheckpointPolicyV2,
   CheckpointPolicyV2Shape
->()("t3/orchestration-v2/CheckpointPolicy") {}
+>()("t3/orchestration-v2/CheckpointPolicy/CheckpointPolicyV2") {}

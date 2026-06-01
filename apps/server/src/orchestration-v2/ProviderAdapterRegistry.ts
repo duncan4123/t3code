@@ -52,7 +52,7 @@ export interface ProviderAdapterRegistryV2Shape {
 export class ProviderAdapterRegistryV2 extends Context.Service<
   ProviderAdapterRegistryV2,
   ProviderAdapterRegistryV2Shape
->()("t3/orchestration-v2/ProviderAdapterRegistry") {}
+>()("t3/orchestration-v2/ProviderAdapterRegistry/ProviderAdapterRegistryV2") {}
 
 export const ProviderAdapterRegistryBuildError = Schema.Union([ProviderAdapterDriverCreateError]);
 export type ProviderAdapterRegistryBuildError = typeof ProviderAdapterRegistryBuildError.Type;

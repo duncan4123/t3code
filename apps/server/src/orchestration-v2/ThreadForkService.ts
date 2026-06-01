@@ -55,4 +55,4 @@ export interface ThreadForkServiceV2Shape {
 export class ThreadForkServiceV2 extends Context.Service<
   ThreadForkServiceV2,
   ThreadForkServiceV2Shape
->()("t3/orchestration-v2/ThreadForkService") {}
+>()("t3/orchestration-v2/ThreadForkService/ThreadForkServiceV2") {}
