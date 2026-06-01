@@ -18,10 +18,10 @@ PR #2811 adds local filesystem-based skill loading for the OpenCode provider by 
 
 Our fork (`duncan4123/t3code`) matches the PR's base branch structure:
 
-| File | PR base commit | Our fork | Match? |
-|------|---------------|----------|--------|
-| `OpenCodeProvider.ts` | `dea95c990` | Identical structure, same signatures | Yes |
-| `OpenCodeDriver.ts` | `816e8b70f` | Identical structure | Yes |
+| File                  | PR base commit | Our fork                             | Match? |
+| --------------------- | -------------- | ------------------------------------ | ------ |
+| `OpenCodeProvider.ts` | `dea95c990`    | Identical structure, same signatures | Yes    |
+| `OpenCodeDriver.ts`   | `816e8b70f`    | Identical structure                  | Yes    |
 
 Both files in our fork share the same imports, function signatures, and call patterns. The PR's changes are purely additive — no existing code is modified, only new functions are added and existing calls are extended with additional parameters.
 
@@ -58,10 +58,11 @@ function parseSkillFrontmatter(
 ```typescript
 function loadOpenCodeSkills(
   cwd: string,
-): Effect.Effect<ReadonlyArray<ServerProviderSkill>, never, FileSystem.FileSystem | Path.Path>
+): Effect.Effect<ReadonlyArray<ServerProviderSkill>, never, FileSystem.FileSystem | Path.Path>;
 ```
 
 **Good:**
+
 - Graceful degradation: missing directory → empty array, unreadable files → skipped, invalid frontmatter → skipped
 - Skills are marked `enabled: true` by default
 - `path` and `description`/`displayName` are properly wired
@@ -69,14 +70,19 @@ function loadOpenCodeSkills(
 **Concerns:**
 
 1. **Non-idiomatic Effect error handling**: Uses `Effect.exit` + `_tag` checks for control flow. More idiomatic Effect would use `Effect.catchAll` or `Effect.orElseSucceed`:
+
    ```typescript
    // Current:
-   const entriesExit = yield* Effect.exit(fs.readDirectory(skillsDir));
-   if (entriesExit._tag !== "Success") { return []; }
+   const entriesExit = yield * Effect.exit(fs.readDirectory(skillsDir));
+   if (entriesExit._tag !== "Success") {
+     return [];
+   }
    // Better:
-   const entries = yield* fs.readDirectory(skillsDir).pipe(
-     Effect.catchAll(() => Effect.succeed([] as ReadonlyArray<string>))
-   );
+   const entries =
+     yield *
+     fs
+       .readDirectory(skillsDir)
+       .pipe(Effect.catchAll(() => Effect.succeed([] as ReadonlyArray<string>)));
    ```
 
 2. **`shortDescription` truncation**: Cuts at 200 chars regardless of word boundaries — could split mid-word. Should truncate at last space before limit.
@@ -102,14 +108,14 @@ The `Layer.merge(Path.layer, NodeFileSystem.layer)` provision is added to two ca
 
 ### Conflict Points
 
-| Location | PR #2811 | PR #2891 | Resolution |
-|----------|---------|----------|------------|
-| `OpenCodeProvider.ts` import | Adds `ServerProviderSkill` | Adds `ServerProviderSkill` | Trivial — keep one |
-| `OpenCodeProvider.ts` import | Adds `FileSystem`, `Path` | Adds `OpenCodeSkill` type | Keep both |
-| `checkOpenCodeProviderStatus` success path | Adds `skills` from `loadOpenCodeSkills(cwd)` | Adds `skills` from `mapOpenCodeSkills(inventory.skills)` | **MERGE**: call both, merge results |
-| `makePendingOpenCodeProvider` | Adds `cwd` param + `loadOpenCodeSkills` | No change | PR #2811 wins |
-| `opencodeRuntime.ts` `OpenCodeInventory` | No change | Adds `skills: OpenCodeSkill[]` | PR #2891 wins |
-| `opencodeRuntime.ts` `loadOpenCodeInventory` | No change | Adds `loadSkills` + concurrent call | PR #2891 wins |
+| Location                                     | PR #2811                                     | PR #2891                                                 | Resolution                          |
+| -------------------------------------------- | -------------------------------------------- | -------------------------------------------------------- | ----------------------------------- |
+| `OpenCodeProvider.ts` import                 | Adds `ServerProviderSkill`                   | Adds `ServerProviderSkill`                               | Trivial — keep one                  |
+| `OpenCodeProvider.ts` import                 | Adds `FileSystem`, `Path`                    | Adds `OpenCodeSkill` type                                | Keep both                           |
+| `checkOpenCodeProviderStatus` success path   | Adds `skills` from `loadOpenCodeSkills(cwd)` | Adds `skills` from `mapOpenCodeSkills(inventory.skills)` | **MERGE**: call both, merge results |
+| `makePendingOpenCodeProvider`                | Adds `cwd` param + `loadOpenCodeSkills`      | No change                                                | PR #2811 wins                       |
+| `opencodeRuntime.ts` `OpenCodeInventory`     | No change                                    | Adds `skills: OpenCodeSkill[]`                           | PR #2891 wins                       |
+| `opencodeRuntime.ts` `loadOpenCodeInventory` | No change                                    | Adds `loadSkills` + concurrent call                      | PR #2891 wins                       |
 
 ### Recommended Merge Strategy
 
@@ -121,10 +127,10 @@ The `Layer.merge(Path.layer, NodeFileSystem.layer)` provision is added to two ca
 In `checkOpenCodeProviderStatus`, deduplicate by skill `name` (server skills should take precedence over local skills when both exist):
 
 ```typescript
-const localSkills = yield* loadOpenCodeSkills(cwd);
+const localSkills = yield * loadOpenCodeSkills(cwd);
 const serverSkills = mapOpenCodeSkills(inventoryExit.value.skills);
-const serverNames = new Set(serverSkills.map(s => s.name));
-const skills = [...serverSkills, ...localSkills.filter(s => !serverNames.has(s.name))];
+const serverNames = new Set(serverSkills.map((s) => s.name));
+const skills = [...serverSkills, ...localSkills.filter((s) => !serverNames.has(s.name))];
 ```
 
 ### Risk Assessment
