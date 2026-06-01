@@ -655,7 +655,7 @@ export interface CodexAppServerClientFactoryShape {
 export class CodexAppServerClientFactory extends Context.Service<
   CodexAppServerClientFactory,
   CodexAppServerClientFactoryShape
->()("t3/orchestration-v2/CodexAppServerClientFactory") {}
+>()("t3/orchestration-v2/Adapters/CodexAdapterV2/CodexAppServerClientFactory") {}
 
 export const makeCodexAppServerClientFactoryCommandLayer = (
   options: CodexClient.CodexAppServerCommandLayerOptions,

@@ -240,7 +240,7 @@ describe("ClaudeAdapterV2 native fork", () => {
         }> = [];
         const adapter = makeClaudeAdapterV2({
           instanceId: CLAUDE_DEFAULT_INSTANCE_ID,
-          settings: Schema.decodeSync(ClaudeSettings)({}),
+          settings: yield* Schema.decodeUnknownEffect(ClaudeSettings)({}),
           environment: {},
           idAllocator,
           queryRunner: {

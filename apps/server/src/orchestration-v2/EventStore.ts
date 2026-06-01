@@ -70,7 +70,7 @@ export interface EventStoreV2Shape {
 }
 
 export class EventStoreV2 extends Context.Service<EventStoreV2, EventStoreV2Shape>()(
-  "t3/orchestration-v2/EventStore",
+  "t3/orchestration-v2/EventStore/EventStoreV2",
 ) {}
 
 /**

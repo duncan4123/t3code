@@ -23,7 +23,7 @@ import {
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Random from "effect/Random";
+import * as Crypto from "effect/Crypto";
 import * as Schema from "effect/Schema";
 
 export const IdAllocatorV2Kind = Schema.Literals([
@@ -170,7 +170,7 @@ export interface IdAllocatorV2Shape {
 }
 
 export class IdAllocatorV2 extends Context.Service<IdAllocatorV2, IdAllocatorV2Shape>()(
-  "t3/orchestration-v2/IdAllocator",
+  "t3/orchestration-v2/IdAllocator/IdAllocatorV2",
 ) {}
 
 const encodePart = (part: string | number): string => encodeURIComponent(String(part));
@@ -186,7 +186,7 @@ const randomId =
     readonly make: (value: string) => Id;
   }) =>
   (allocationInput: Input): Effect.Effect<Id, IdAllocatorV2Error> =>
-    Random.nextUUIDv4.pipe(
+    Crypto.randomUUIDv4.pipe(
       Effect.map((uuid) => input.make(joinId(input.prefix, ...input.parts, uuid))),
       Effect.mapError(
         (cause) =>

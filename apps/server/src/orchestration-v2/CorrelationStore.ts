@@ -116,4 +116,4 @@ export interface CorrelationStoreV2Shape {
 export class CorrelationStoreV2 extends Context.Service<
   CorrelationStoreV2,
   CorrelationStoreV2Shape
->()("t3/orchestration-v2/CorrelationStore") {}
+>()("t3/orchestration-v2/CorrelationStore/CorrelationStoreV2") {}

@@ -46,7 +46,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
-import * as Random from "effect/Random";
+import * as Crypto from "effect/Crypto";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -276,7 +276,7 @@ export interface ClaudeAgentSdkQueryRunnerShape {
 export class ClaudeAgentSdkQueryRunner extends Context.Service<
   ClaudeAgentSdkQueryRunner,
   ClaudeAgentSdkQueryRunnerShape
->()("t3/orchestration-v2/ClaudeAgentSdkQueryRunner") {}
+>()("t3/orchestration-v2/Adapters/ClaudeAdapterV2/ClaudeAgentSdkQueryRunner") {}
 
 export interface ClaudeAgentSdkSessionForkInput {
   readonly sessionId: string;
@@ -446,7 +446,7 @@ export const claudeAgentSdkQueryRunnerLiveLayer: Layer.Layer<
     });
 
     return ClaudeAgentSdkQueryRunner.of({
-      allocateSessionId: Random.nextUUIDv4,
+      allocateSessionId: Crypto.randomUUIDv4,
       open: Effect.fn("ClaudeAgentSdkQueryRunner.open")(function* (
         input: ClaudeAgentSdkQueryOpenInput,
       ) {
@@ -2962,7 +2962,7 @@ const makeDefaultClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2.layer")(function* 
 
   return makeClaudeAdapterV2({
     instanceId: CLAUDE_DEFAULT_INSTANCE_ID,
-    settings: Schema.decodeSync(ClaudeSettings)({}),
+    settings: yield* Schema.decodeUnknownEffect(ClaudeSettings)({}),
     environment: process.env,
     idAllocator,
     queryRunner,
