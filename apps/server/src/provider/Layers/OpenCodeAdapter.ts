@@ -59,10 +59,12 @@ interface OpenCodeTurnSnapshot {
 }
 
 type OpenCodeSubscribedEvent =
-  Awaited<ReturnType<OpencodeClient["event"]["subscribe"]>> extends {
+  Awaited<ReturnType<OpencodeClient["global"]["event"]>> extends {
     readonly stream: AsyncIterable<infer TEvent>;
   }
-    ? TEvent
+    ? TEvent extends { readonly payload: infer TPayload }
+      ? TPayload
+      : never
     : never;
 
 interface OpenCodeGlobalEventEnvelope {
@@ -1074,7 +1076,7 @@ export function makeOpenCodeAdapter(
             subscription.stream,
             (cause) =>
               new OpenCodeRuntimeError({
-                operation: "event.subscribe",
+                operation: "global.event",
                 detail: openCodeRuntimeErrorDetail(cause),
                 cause,
               }),
