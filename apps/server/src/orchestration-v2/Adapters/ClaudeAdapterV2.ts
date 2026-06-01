@@ -46,7 +46,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
-import * as Crypto from "effect/Crypto";
+import { randomUUID } from "node:crypto";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -446,7 +446,7 @@ export const claudeAgentSdkQueryRunnerLiveLayer: Layer.Layer<
     });
 
     return ClaudeAgentSdkQueryRunner.of({
-      allocateSessionId: Crypto.randomUUIDv4,
+      allocateSessionId: Effect.sync(() => randomUUID()),
       open: Effect.fn("ClaudeAgentSdkQueryRunner.open")(function* (
         input: ClaudeAgentSdkQueryOpenInput,
       ) {
