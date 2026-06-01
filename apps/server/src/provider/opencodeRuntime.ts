@@ -95,9 +95,16 @@ export interface OpenCodeCommandResult {
   readonly code: number;
 }
 
+export interface OpenCodeSkill {
+  readonly name: string;
+  readonly description: string;
+  readonly location: string;
+}
+
 export interface OpenCodeInventory {
   readonly providerList: ProviderListResponse;
   readonly agents: ReadonlyArray<Agent>;
+  readonly skills: ReadonlyArray<OpenCodeSkill>;
 }
 
 export interface ParsedOpenCodeModelSlug {
@@ -529,9 +536,14 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       Effect.map((result) => result.data ?? []),
     );
 
+  const loadSkills = (client: OpencodeClient) =>
+    runOpenCodeSdk("app.skills", () => client.app.skills()).pipe(
+      Effect.map((result) => (result.data ?? []).map(({ name, description, location }) => ({ name, description, location }))),
+    );
+
   const loadOpenCodeInventory: OpenCodeRuntimeShape["loadOpenCodeInventory"] = (client) =>
-    Effect.all([loadProviders(client), loadAgents(client)], { concurrency: "unbounded" }).pipe(
-      Effect.map(([providerList, agents]) => ({ providerList, agents })),
+    Effect.all([loadProviders(client), loadAgents(client), loadSkills(client)], { concurrency: "unbounded" }).pipe(
+      Effect.map(([providerList, agents, skills]) => ({ providerList, agents, skills })),
     );
 
   return {
