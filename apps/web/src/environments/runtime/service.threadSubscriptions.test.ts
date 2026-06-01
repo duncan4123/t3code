@@ -101,6 +101,12 @@ vi.mock("@t3tools/client-runtime", async (importOriginal) => {
       searchEntries: vi.fn(),
       writeFile: vi.fn(),
     },
+    orchestrationV2: {
+      dispatchCommand: vi.fn(),
+      getThreadProjection: vi.fn(),
+      subscribeShell: vi.fn(() => () => undefined),
+      subscribeThread: vi.fn(() => () => undefined),
+    },
     filesystem: {
       browse: vi.fn(),
     },

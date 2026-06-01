@@ -47,6 +47,7 @@ const loadSkills = (client: OpencodeClient) =>
 ```
 
 **Design notes:**
+
 - Uses the existing `runOpenCodeSdk` wrapper — consistent error handling with all
   other SDK calls. Errors surface as `OpenCodeRuntimeError` with span
   `opencode.app.skills` in telemetry.
@@ -98,18 +99,18 @@ on empty string. The fallback to `undefined` avoids a decode error.
 
 ## Fork Compatibility Assessment
 
-| Change | Compatible? | Breaking? | Notes |
-|--------|-------------|-----------|-------|
-| `OpenCodeSkill` interface | **YES** | No | New interface, no conflicts |
-| `skills` on `OpenCodeInventory` | **YES** | No | Additive field; consumers that destructure `{ providerList, agents }` are unaffected |
-| `loadSkills` function | **YES** | No | New; uses existing `runOpenCodeSdk` pattern |
-| `loadOpenCodeInventory` update | **YES** | No | Adds third `Effect.all` argument; destructuring changed from `[providerList, agents]` → `[providerList, agents, skills]` |
-| `ServerProviderSkill` import | **YES** | No | Already defined in `@t3tools/contracts` |
-| `OpenCodeSkill` import | **YES** | No | Type-only import from sibling module |
-| `mapOpenCodeSkills` function | **YES** | No | New; pure mapping function |
-| `skills` in `buildServerProvider` | **YES** | No | `ServerProvider.skills` has default `[]` via `Schema.withDecodingDefault(Effect.succeed([]))` |
-| SDK `client.app.skills()` | **YES** | No | Present in `@opencode-ai/sdk/v2` at `gen/sdk.gen.d.ts:133` |
-| `makePendingOpenCodeProvider` call sites | **YES** | No | Not affected — uses `buildServerProvider` without `skills`, default `[]` applies |
+| Change                                   | Compatible? | Breaking? | Notes                                                                                                                    |
+| ---------------------------------------- | ----------- | --------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `OpenCodeSkill` interface                | **YES**     | No        | New interface, no conflicts                                                                                              |
+| `skills` on `OpenCodeInventory`          | **YES**     | No        | Additive field; consumers that destructure `{ providerList, agents }` are unaffected                                     |
+| `loadSkills` function                    | **YES**     | No        | New; uses existing `runOpenCodeSdk` pattern                                                                              |
+| `loadOpenCodeInventory` update           | **YES**     | No        | Adds third `Effect.all` argument; destructuring changed from `[providerList, agents]` → `[providerList, agents, skills]` |
+| `ServerProviderSkill` import             | **YES**     | No        | Already defined in `@t3tools/contracts`                                                                                  |
+| `OpenCodeSkill` import                   | **YES**     | No        | Type-only import from sibling module                                                                                     |
+| `mapOpenCodeSkills` function             | **YES**     | No        | New; pure mapping function                                                                                               |
+| `skills` in `buildServerProvider`        | **YES**     | No        | `ServerProvider.skills` has default `[]` via `Schema.withDecodingDefault(Effect.succeed([]))`                            |
+| SDK `client.app.skills()`                | **YES**     | No        | Present in `@opencode-ai/sdk/v2` at `gen/sdk.gen.d.ts:133`                                                               |
+| `makePendingOpenCodeProvider` call sites | **YES**     | No        | Not affected — uses `buildServerProvider` without `skills`, default `[]` applies                                         |
 
 ### No Call Site Breakage
 
@@ -122,6 +123,7 @@ version-too-old error path continue to default to `[]`.
 ### No Type Cascade
 
 `OpenCodeInventory.skills` addition doesn't break any other code because:
+
 1. `flattenOpenCodeModels(input: OpenCodeInventory)` destructures only
    `input.providerList` and `input.agents` — it ignores `skills`.
 2. The return type of `loadOpenCodeInventory` changes from 2-tuple to 3-tuple
@@ -141,6 +143,7 @@ OpenCode provider. Without this PR:
 3. Skills discovered by OpenCode's server were invisible to T3 Code.
 
 With this PR:
+
 1. `checkOpenCodeProviderStatus` loads skills from the running OpenCode server.
 2. Skills are mapped to the contract format and included in the provider snapshot.
 3. Consumers (including the web UI) see the skills as part of the provider status.
@@ -151,21 +154,25 @@ the contracts, client-runtime, or apps/web packages.
 ## Risks and Edge Cases
 
 ### Risk: Empty or missing skills
+
 **Mitigated.** `result.data ?? []` handles null/undefined responses. An empty
 skills array is semantically correct — the provider has no skills to expose.
 
 ### Risk: SDK error during skill fetch
+
 **Mitigated.** `runOpenCodeSdk` wraps the call in `Effect.tryPromise` with
 error mapping to `OpenCodeRuntimeError`. If `client.app.skills()` throws, the
 error propagates through `checkOpenCodeProviderStatus` → `inventoryExit._tag === "Failure"`
 → `fallback()`. The provider status shows a probe error rather than crashing.
 
 ### Risk: Skill with empty description string
+
 **Mitigated.** `skill.description || undefined` converts empty string to
 `undefined`, preventing `ServerProviderSkill` decode failure on the optional
 `description` field.
 
 ### Risk: Skill with empty name
+
 **Not explicitly mitigated.** `ServerProviderSkill.name` is
 `TrimmedNonEmptyString` — a skill with an empty name would cause a decode
 failure. However, this would be an OpenCode server bug (it shouldn't return
