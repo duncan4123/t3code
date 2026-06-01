@@ -53,12 +53,30 @@ other sessions could crash the pump.
 
 ## Fork Compatibility
 
-### Merge Risk: LOW-MEDIUM
+### Merge Conflict Analysis (verified via `git merge-tree`)
 
-The PR touches only `OpenCodeAdapter.ts` (event pump rewrite) and its tests.
-These are additive changes — new interfaces, new helpers, new logic branches.
-The legacy `event.subscribe` path is retained as the fallback.
+**Result: CLEAN — zero conflicts.**
 
+```
+$ git merge-tree $(git merge-base origin/main upstream-pr-2704) HEAD upstream-pr-2704 | grep -c '<<<<<<<'
+0
+```
+
+Both files (`OpenCodeAdapter.ts`, `OpenCodeAdapter.test.ts`) are "changed in
+both" relative to the merge base, but the changes land in non-overlapping
+regions:
+
+| Fork change | Location (approx line) | PR change | Location (approx line) | Conflict? |
+|-------------|------------------------|-----------|------------------------|-----------|
+| `Random.nextUUIDv4` → `Crypto.randomUUIDv4` | L5, L137-144 | New types (`OpenCodeGlobalEventEnvelope`, etc.) | L60-92 | **No** |
+| `buildEventBase` gen→pipe refactor | L137-167 | New helpers (`openCodeRuntimeErrorStatus`, etc.) | L404-431 | **No** |
+| `turns` filter/map→for-loop | ~L450 | `startEventPump` rewrite | L957-1078 | **No** |
+| `buildEventBase` comment doc | L109-136 | `updateProviderSession` comment | L119 | **No** |
+
+The test file divergence is 1 insert + 1 delete — test-layer wiring
+changes that don't overlap with the PR's four new test cases.
+
+### Merge Risk: LOW
 **Potential conflicts with fork divergences:**
 
 | Fork commit | Risk | Notes |
