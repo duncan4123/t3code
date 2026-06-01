@@ -259,6 +259,18 @@ function createMockEnvironmentApi(input: {
       subscribeThread: (() => () =>
         undefined) as EnvironmentApi["orchestration"]["subscribeThread"],
     },
+    orchestrationV2: {
+      dispatchCommand: (() => {
+        throw new Error("Not implemented in browser test.");
+      }) as EnvironmentApi["orchestrationV2"]["dispatchCommand"],
+      getThreadProjection: (() => {
+        throw new Error("Not implemented in browser test.");
+      }) as EnvironmentApi["orchestrationV2"]["getThreadProjection"],
+      subscribeShell: (() => () =>
+        undefined) as EnvironmentApi["orchestrationV2"]["subscribeShell"],
+      subscribeThread: (() => () =>
+        undefined) as EnvironmentApi["orchestrationV2"]["subscribeThread"],
+    },
   };
 }
 

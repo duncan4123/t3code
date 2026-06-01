@@ -69,6 +69,7 @@ import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
 } from "./orchestration/Services/OrchestrationEngine.ts";
+import { layerUnavailable as OrchestratorV2UnavailableLayer } from "./orchestration-v2/Orchestrator.ts";
 import { OrchestrationListenerCallbackError } from "./orchestration/Errors.ts";
 import {
   ProjectionSnapshotQuery,
@@ -696,6 +697,7 @@ const buildAppUnderTest = (options?: {
           ...options?.layers?.checkpointDiffQuery,
         }),
       ),
+      Layer.provide(OrchestratorV2UnavailableLayer),
     );
 
     const appLayer = servedRoutesLayer.pipe(
