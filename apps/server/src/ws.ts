@@ -24,6 +24,10 @@ import {
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetSnapshotError,
   OrchestrationGetTurnDiffError,
+  ORCHESTRATION_V2_WS_METHODS,
+  OrchestrationV2DispatchCommandError,
+  OrchestrationV2GetShellSnapshotError,
+  OrchestrationV2GetThreadProjectionError,
   ORCHESTRATION_WS_METHODS,
   ProjectSearchEntriesError,
   ProjectWriteFileError,
@@ -32,6 +36,7 @@ import {
   ThreadId,
   type TerminalAttachStreamEvent,
   type TerminalError,
+  type OrchestrationV2ThreadShell,
   type TerminalEvent,
   type TerminalMetadataStreamEvent,
   WS_METHODS,
@@ -48,6 +53,8 @@ import * as ExternalLauncher from "./process/externalLauncher.ts";
 import { normalizeDispatchCommand } from "./orchestration/Normalizer.ts";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import { OrchestratorV2 } from "./orchestration-v2/Orchestrator.ts";
+import { userFacingDispatchErrorMessage } from "./orchestration-v2/UserFacingErrors.ts";
 import {
   observeRpcEffect,
   observeRpcStream,
@@ -168,6 +175,7 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
       const crypto = yield* Crypto.Crypto;
       const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
       const orchestrationEngine = yield* OrchestrationEngineService;
+      const orchestrationV2 = yield* OrchestratorV2;
       const checkpointDiffQuery = yield* CheckpointDiffQuery;
       const keybindings = yield* Keybindings;
       const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
@@ -627,6 +635,116 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
           .refreshStatus(cwd)
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
 
+      const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subscribeThread")(
+        function* (input: { readonly threadId: ThreadId }) {
+          yield* Effect.annotateCurrentSpan({
+            "orchestration_v2.thread_id": input.threadId,
+          });
+
+          const projection = yield* orchestrationV2.getThreadProjection(input.threadId).pipe(
+            Effect.mapError(
+              (cause) =>
+                new OrchestrationV2GetThreadProjectionError({
+                  threadId: input.threadId,
+                  message: `Failed to load orchestration V2 thread ${input.threadId}`,
+                  cause,
+                }),
+            ),
+          );
+          const snapshotSequence = yield* orchestrationV2
+            .getThreadEventSequence(input.threadId)
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationV2GetThreadProjectionError({
+                    threadId: input.threadId,
+                    message: `Failed to load orchestration V2 sequence for thread ${input.threadId}`,
+                    cause,
+                  }),
+              ),
+            );
+
+          const liveStream = orchestrationV2.streamStoredEvents.pipe(
+            Stream.filter((stored) => stored.event.threadId === input.threadId),
+            Stream.filter((stored) => stored.sequence > snapshotSequence),
+            Stream.map((stored) => ({
+              kind: "event" as const,
+              sequence: stored.sequence,
+              event: stored.event,
+            })),
+            Stream.mapError(
+              (cause) =>
+                new OrchestrationV2GetThreadProjectionError({
+                  threadId: input.threadId,
+                  message: `Failed while streaming orchestration V2 thread ${input.threadId}`,
+                  cause,
+                }),
+            ),
+          );
+
+          return Stream.concat(
+            Stream.make({
+              kind: "snapshot" as const,
+              snapshotSequence,
+              projection,
+            }),
+            liveStream,
+          );
+        },
+      );
+
+      const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subscribeShell")(
+        function* () {
+          const snapshot = yield* orchestrationV2.getShellSnapshot().pipe(
+            Effect.mapError(
+              (cause) =>
+                new OrchestrationV2GetShellSnapshotError({
+                  message: "Failed to load orchestration V2 shell snapshot",
+                  cause,
+                }),
+            ),
+          );
+
+          const liveStream = orchestrationV2.streamDomainEvents.pipe(
+            Stream.mapEffect((event) =>
+              orchestrationV2.getShellSnapshot().pipe(
+                Effect.map(
+                  (nextSnapshot) =>
+                    nextSnapshot.threads.find((thread) => thread.id === event.threadId) ?? null,
+                ),
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestrationV2GetShellSnapshotError({
+                      message: `Failed while streaming orchestration V2 shell thread ${event.threadId}`,
+                      cause,
+                    }),
+                ),
+              ),
+            ),
+            Stream.filter((thread): thread is OrchestrationV2ThreadShell => thread !== null),
+            Stream.map((thread) => ({
+              kind: "thread.updated" as const,
+              thread,
+            })),
+            Stream.mapError(
+              (cause) =>
+                new OrchestrationV2GetShellSnapshotError({
+                  message: "Failed while streaming orchestration V2 shell",
+                  cause,
+                }),
+            ),
+          );
+
+          return Stream.concat(
+            Stream.make({
+              kind: "snapshot" as const,
+              snapshot,
+            }),
+            liveStream,
+          );
+        },
+      );
+
       return WsRpcGroup.of({
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           observeRpcEffect(
@@ -854,6 +972,70 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
               );
             }),
             { "rpc.aggregate": "orchestration" },
+          ),
+        [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
+          observeRpcEffect(
+            ORCHESTRATION_V2_WS_METHODS.dispatchCommand,
+            orchestrationV2.dispatch(command).pipe(
+              Effect.map((result) => ({ sequence: result.sequence })),
+              Effect.mapError((cause) => {
+                const detail = userFacingDispatchErrorMessage(cause);
+                return new OrchestrationV2DispatchCommandError({
+                  commandId: command.commandId,
+                  commandType: command.type,
+                  message: detail ?? "Failed to dispatch orchestration V2 command",
+                  ...(detail === undefined ? {} : { detail }),
+                  cause,
+                });
+              }),
+            ),
+            {
+              "rpc.aggregate": "orchestrationV2",
+              "orchestration_v2.command_id": command.commandId,
+              "orchestration_v2.command_type": command.type,
+              "orchestration_v2.thread_id":
+                command.type === "thread.fork" || command.type === "thread.merge_back"
+                  ? command.targetThreadId
+                  : command.threadId,
+              ...(command.type === "thread.fork" || command.type === "thread.merge_back"
+                ? { "orchestration_v2.source_thread_id": command.sourceThreadId }
+                : {}),
+            },
+          ),
+        [ORCHESTRATION_V2_WS_METHODS.getThreadProjection]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_V2_WS_METHODS.getThreadProjection,
+            orchestrationV2.getThreadProjection(input.threadId).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationV2GetThreadProjectionError({
+                    threadId: input.threadId,
+                    message: `Failed to load orchestration V2 thread ${input.threadId}`,
+                    cause,
+                  }),
+              ),
+            ),
+            {
+              "rpc.aggregate": "orchestrationV2",
+              "orchestration_v2.thread_id": input.threadId,
+            },
+          ),
+        [ORCHESTRATION_V2_WS_METHODS.subscribeShell]: (_input) =>
+          observeRpcStreamEffect(
+            ORCHESTRATION_V2_WS_METHODS.subscribeShell,
+            subscribeOrchestrationV2Shell(),
+            {
+              "rpc.aggregate": "orchestrationV2",
+            },
+          ),
+        [ORCHESTRATION_V2_WS_METHODS.subscribeThread]: (input) =>
+          observeRpcStreamEffect(
+            ORCHESTRATION_V2_WS_METHODS.subscribeThread,
+            subscribeOrchestrationV2Thread(input),
+            {
+              "rpc.aggregate": "orchestrationV2",
+              "orchestration_v2.thread_id": input.threadId,
+            },
           ),
         [WS_METHODS.serverGetConfig]: (_input) =>
           observeRpcEffect(WS_METHODS.serverGetConfig, loadServerConfig, {

@@ -1,0 +1,78 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { assert, it } from "@effect/vitest";
+import {
+  CommandId,
+  type ModelSelection,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+
+import { CheckpointStoreLive } from "../checkpointing/Layers/CheckpointStore.ts";
+import { ServerConfig } from "../config.ts";
+import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
+import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
+import * as VcsProcess from "../vcs/VcsProcess.ts";
+import { OrchestratorV2 } from "./Orchestrator.ts";
+import { OrchestrationV2LayerLive } from "./runtimeLayer.ts";
+
+const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
+  prefix: "t3-orchestration-v2-runtime-layer-",
+});
+
+const modelSelection = {
+  instanceId: ProviderInstanceId.make("codex"),
+  model: "gpt-5.4",
+} satisfies ModelSelection;
+
+const VcsDriverRegistryTestLayer = VcsDriverRegistry.layer.pipe(
+  Layer.provide(VcsProcess.layer),
+  Layer.provide(ServerConfigLayer),
+  Layer.provide(NodeServices.layer),
+);
+
+const CheckpointStoreTestLayer = CheckpointStoreLive.pipe(
+  Layer.provide(VcsDriverRegistryTestLayer),
+);
+
+const TestLayer = OrchestrationV2LayerLive.pipe(
+  Layer.provide(SqlitePersistenceMemory),
+  Layer.provide(CheckpointStoreTestLayer),
+  Layer.provide(ServerConfigLayer),
+  Layer.provide(ServerSettingsService.layerTest()),
+  Layer.provide(NodeServices.layer),
+);
+
+it.layer(TestLayer)("OrchestrationV2LayerLive", (it) => {
+  it.effect("creates and reads a thread through the production V2 composition", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const threadId = ThreadId.make("runtime-layer-thread");
+      const projectId = ProjectId.make("runtime-layer-project");
+
+      const result = yield* orchestrator.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("runtime-layer-create"),
+        threadId,
+        projectId,
+        title: "Runtime layer thread",
+        modelSelection: modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+
+      const projection = yield* orchestrator.getThreadProjection(threadId);
+
+      assert.equal(result.sequence, 1);
+      assert.equal(projection.thread.id, threadId);
+      assert.equal(projection.thread.projectId, projectId);
+      assert.equal(projection.thread.defaultProvider, "codex");
+      assert.deepEqual(projection.runs, []);
+    }),
+  );
+});
