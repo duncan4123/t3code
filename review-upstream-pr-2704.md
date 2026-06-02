@@ -15,6 +15,7 @@ the wrapped payload is `event.payload.properties.sessionID`. This mismatch
 causes ALL events from newer OpenCode versions to be silently discarded.
 
 This PR fixes event ingestion by:
+
 1. Preferring `global.event` — the new endpoint that returns directory-scoped
    wrapped events
 2. Filtering events by session `directory` so multi-session servers don't
@@ -27,6 +28,7 @@ This PR fixes event ingestion by:
 ## Root Cause Analysis
 
 From issue #2691: newer OpenCode server wraps events as:
+
 ```json
 { "directory": "/path/to/project", "payload": { "type": "session.status", "properties": {...} } }
 ```
@@ -40,11 +42,11 @@ completed.
 
 ## Issue Assessment
 
-| Issue | Fixed? | Evidence |
-|-------|--------|----------|
-| #2644 — "working..." hangs indefinitely | **Yes** | global.event path delivers properly unwrapped events; session.idle status triggers `turn.completed` |
-| #2652 — messages save to opencode.db but never render | **Yes** | Same root cause; payload.unwrap → content.delta events reach the UI |
-| #2691 — SSE events silently dropped | **Yes** | `parseOpenCodeSubscribedEvent` validates payload shape; global path unwraps envelope; directory filter prevents cross-session discard |
+| Issue                                                 | Fixed?  | Evidence                                                                                                                              |
+| ----------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| #2644 — "working..." hangs indefinitely               | **Yes** | global.event path delivers properly unwrapped events; session.idle status triggers `turn.completed`                                   |
+| #2652 — messages save to opencode.db but never render | **Yes** | Same root cause; payload.unwrap → content.delta events reach the UI                                                                   |
+| #2691 — SSE events silently dropped                   | **Yes** | `parseOpenCodeSubscribedEvent` validates payload shape; global path unwraps envelope; directory filter prevents cross-session discard |
 
 The PR title says "Fixes #2644" but the root cause is shared across all three
 issues. The directory filtering + payload validation in the PR handles both the
@@ -66,28 +68,30 @@ Both files (`OpenCodeAdapter.ts`, `OpenCodeAdapter.test.ts`) are "changed in
 both" relative to the merge base, but the changes land in non-overlapping
 regions:
 
-| Fork change | Location (approx line) | PR change | Location (approx line) | Conflict? |
-|-------------|------------------------|-----------|------------------------|-----------|
-| `Random.nextUUIDv4` → `Crypto.randomUUIDv4` | L5, L137-144 | New types (`OpenCodeGlobalEventEnvelope`, etc.) | L60-92 | **No** |
-| `buildEventBase` gen→pipe refactor | L137-167 | New helpers (`openCodeRuntimeErrorStatus`, etc.) | L404-431 | **No** |
-| `turns` filter/map→for-loop | ~L450 | `startEventPump` rewrite | L957-1078 | **No** |
-| `buildEventBase` comment doc | L109-136 | `updateProviderSession` comment | L119 | **No** |
+| Fork change                                 | Location (approx line) | PR change                                        | Location (approx line) | Conflict? |
+| ------------------------------------------- | ---------------------- | ------------------------------------------------ | ---------------------- | --------- |
+| `Random.nextUUIDv4` → `Crypto.randomUUIDv4` | L5, L137-144           | New types (`OpenCodeGlobalEventEnvelope`, etc.)  | L60-92                 | **No**    |
+| `buildEventBase` gen→pipe refactor          | L137-167               | New helpers (`openCodeRuntimeErrorStatus`, etc.) | L404-431               | **No**    |
+| `turns` filter/map→for-loop                 | ~L450                  | `startEventPump` rewrite                         | L957-1078              | **No**    |
+| `buildEventBase` comment doc                | L109-136               | `updateProviderSession` comment                  | L119                   | **No**    |
 
 The test file divergence is 1 insert + 1 delete — test-layer wiring
 changes that don't overlap with the PR's four new test cases.
 
 ### Merge Risk: LOW
+
 **Potential conflicts with fork divergences:**
 
-| Fork commit | Risk | Notes |
-|-------------|------|-------|
-| #2840 — Effect beta.73 migration | **Low** | `OpenCodeRuntimeError` still uses `Data.TaggedError` in fork; PR doesn't touch error type |
-| #2526 — Fix OpenCode raw text delta assembly | **Low** | That change is in `handleSubscribedEvent`, which the PR passes through unchanged |
-| #2596 — Stricter Effect LSP rules | **None** | Lint-only; no logic changes |
+| Fork commit                                  | Risk     | Notes                                                                                     |
+| -------------------------------------------- | -------- | ----------------------------------------------------------------------------------------- |
+| #2840 — Effect beta.73 migration             | **Low**  | `OpenCodeRuntimeError` still uses `Data.TaggedError` in fork; PR doesn't touch error type |
+| #2526 — Fix OpenCode raw text delta assembly | **Low**  | That change is in `handleSubscribedEvent`, which the PR passes through unchanged          |
+| #2596 — Stricter Effect LSP rules            | **None** | Lint-only; no logic changes                                                               |
 
 **SDK compatibility:** Fork uses `@opencode-ai/sdk@^1.3.15` (installed 1.3.15).
 The `global.event` endpoint may not exist in the `OpencodeClient` type at this
 version. The PR handles this gracefully:
+
 - `OpenCodeGlobalEventClient` uses optional chaining (`global?.event?.()`)
 - `runOpenCodeSdk` wraps the call in try/catch → `TypeError` on missing
   method triggers the fallback to `event.subscribe`
@@ -101,6 +105,7 @@ already has the shape the PR casts to.
 ## Code Quality
 
 **Strengths:**
+
 - Clean separation: `runGlobalEvents` + `runLegacyEvents` are distinct, readable paths
 - `parseOpenCodeSubscribedEvent` with runtime validation is defensive against
   malformed server responses — won't crash the pump
@@ -111,6 +116,7 @@ already has the shape the PR casts to.
   payloads, and fallback path
 
 **Concerns:**
+
 - `OpenCodeGlobalEventClient` is a manual type cast of `OpencodeClient`; if the
   SDK adds `global.event` with a different API shape, type-checking won't catch it.
   The `runOpenCodeSdk` try/catch mitigates runtime impact.
@@ -142,11 +148,11 @@ SDK version.
 
 ## Diff Summary by Change
 
-| Change | Lines | Impact |
-|--------|-------|--------|
-| `OpenCodeGlobalEventEnvelope` + `OpenCodeGlobalEventClient` types | +5 | Additive — no existing code touched |
-| `parseOpenCodeSubscribedEvent()` | +17 | New runtime validation — defensive |
-| `openCodeRuntimeErrorStatus()` + `isOpenCodeGlobalEventUnavailable()` | +22 | New helper to detect fallback conditions |
-| `startEventPump` rewrite (global → legacy) | +55/−11 | Core fix — replaces flat `event.subscribe` with two-tier approach |
-| Test mock: global.event + keepSubscriptionOpen | +32 | New mock capabilities for test harness |
-| Tests: 4 new cases | +217 | Covers all branches |
+| Change                                                                | Lines   | Impact                                                            |
+| --------------------------------------------------------------------- | ------- | ----------------------------------------------------------------- |
+| `OpenCodeGlobalEventEnvelope` + `OpenCodeGlobalEventClient` types     | +5      | Additive — no existing code touched                               |
+| `parseOpenCodeSubscribedEvent()`                                      | +17     | New runtime validation — defensive                                |
+| `openCodeRuntimeErrorStatus()` + `isOpenCodeGlobalEventUnavailable()` | +22     | New helper to detect fallback conditions                          |
+| `startEventPump` rewrite (global → legacy)                            | +55/−11 | Core fix — replaces flat `event.subscribe` with two-tier approach |
+| Test mock: global.event + keepSubscriptionOpen                        | +32     | New mock capabilities for test harness                            |
+| Tests: 4 new cases                                                    | +217    | Covers all branches                                               |

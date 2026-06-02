@@ -25,6 +25,7 @@ import {
   OpenCodeRuntime,
   openCodeRuntimeErrorDetail,
   type OpenCodeInventory,
+  type OpenCodeSkill,
 } from "../opencodeRuntime.ts";
 import type { Agent, ProviderListResponse } from "@opencode-ai/sdk/v2";
 
@@ -410,6 +411,17 @@ export const makePendingOpenCodeProvider = (
     });
   });
 
+function mapOpenCodeSkills(
+  skills: ReadonlyArray<OpenCodeSkill>,
+): ReadonlyArray<ServerProviderSkill> {
+  return skills.map((skill) => ({
+    name: skill.name,
+    description: skill.description || undefined,
+    path: skill.location,
+    enabled: true,
+  }));
+}
+
 export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatus")(function* (
   openCodeSettings: OpenCodeSettings,
   cwd: string,
@@ -562,6 +574,7 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
     customModels,
     DEFAULT_OPENCODE_MODEL_CAPABILITIES,
   );
+  const skills = mapOpenCodeSkills(inventoryExit.value.skills);
   const connectedCount = inventoryExit.value.providerList.connected.length;
   return buildServerProvider({
     presentation: OPENCODE_PRESENTATION,
