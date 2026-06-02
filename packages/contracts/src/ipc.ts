@@ -73,7 +73,9 @@ import type {
   OrchestrationV2ThreadProjection,
   OrchestrationV2ThreadStreamItem,
 } from "./orchestrationV2.ts";
-import type { EnvironmentId } from "./baseSchemas.ts";
+import { EnvironmentId } from "./baseSchemas.ts";
+import { AuthBearerBootstrapResult, AuthSessionState, AuthWebSocketTokenResult } from "./auth.ts";
+import { AdvertisedEndpoint } from "./remoteAccess.ts";
 import { EditorId } from "./editor.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import type { ClientSettings, ServerSettings, ServerSettingsPatch } from "./settings.ts";
