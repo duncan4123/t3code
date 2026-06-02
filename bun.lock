@@ -252,10 +252,12 @@
         "effect": "catalog:",
       },
       "devDependencies": {
+        "@effect/language-service": "catalog:",
         "@effect/openapi-generator": "catalog:",
         "@effect/platform-node": "catalog:",
         "@effect/vitest": "catalog:",
-        "@types/node": "catalog:",
+        "tsdown": "catalog:",
+        "typescript": "catalog:",
         "vitest": "catalog:",
       },
     },
@@ -334,6 +336,7 @@
   },
   "catalog": {
     "@effect/atom-react": "4.0.0-beta.73",
+    "@effect/language-service": "0.86.2",
     "@effect/openapi-generator": "4.0.0-beta.73",
     "@effect/platform-bun": "4.0.0-beta.73",
     "@effect/platform-node": "4.0.0-beta.73",
@@ -558,6 +561,8 @@
     "@dnd-kit/utilities": ["@dnd-kit/utilities@3.2.2", "", { "dependencies": { "tslib": "^2.0.0" }, "peerDependencies": { "react": ">=16.8.0" } }, "sha512-+MKAJEOfaBe5SmV6t34p80MMKhjvUz0vRrvVJbPT0WElzaOJ/1xs+D+KDv+tD/NE5ujfrChEcshd4fLn0wpiqg=="],
 
     "@effect/atom-react": ["@effect/atom-react@4.0.0-beta.73", "", { "peerDependencies": { "effect": "^4.0.0-beta.73", "react": "^19.2.4", "scheduler": "*" } }, "sha512-RjNqEMV3z3iEFRBtJ1RVuxBNFMYxhDo2iRwck3kBYjrBuXWrKIRyqnunWJdL2KX97Gqp0orxaujG7qnIA5aIEA=="],
+
+    "@effect/language-service": ["@effect/language-service@0.86.2", "", { "bin": { "effect-language-service": "cli.js" } }, "sha512-SaPln+8srOqDJDUwNTDmP5e+IYpEDr9+1epGznnsLqu8xvo6VnxyWARdeLpqvZJlb0Pgy9ca7ppqvvdWbHPXAg=="],
 
     "@effect/openapi-generator": ["@effect/openapi-generator@4.0.0-beta.73", "", { "peerDependencies": { "@effect/platform-node": "^4.0.0-beta.73", "effect": "^4.0.0-beta.73" }, "bin": { "openapigen": "dist/bin.js" } }, "sha512-tN1mKreMo6kypkuPy8Jt3eGoI0DberzD2/5XxEh17lTdyLg7/SUZv3LssRxtzO5+uIYzLNIHfT2zESz7gjCnwA=="],
 
