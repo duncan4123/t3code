@@ -32,7 +32,7 @@
     "dev": "tsdown src/client.ts src/rpc.ts src/protocol.ts src/schema.ts --format esm,cjs --dts --watch --clean",
     "build": "tsdown src/client.ts src/rpc.ts src/protocol.ts src/schema.ts --format esm,cjs --dts --clean",
     "prepare": "effect-language-service patch",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsgo --noEmit",
     "test": "vitest run",
     "generate": "bun run scripts/generate.ts"
   },
