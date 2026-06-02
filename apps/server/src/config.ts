@@ -72,6 +72,7 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly autoBootstrapProjectFromCwd: boolean;
   readonly logWebSocketEvents: boolean;
   readonly tailscaleServeEnabled: boolean;
+  readonly noAuth: boolean;
   readonly tailscaleServePort: number;
 }
 

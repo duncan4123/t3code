@@ -12,7 +12,8 @@ import { execFileSync } from "node:child_process";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
 const GC_OMP_HOOK_VERSION = 1;
-const PATH_PREFIX = `/opt/homebrew/bin:/usr/local/bin:${process.env.HOME}/go/bin:${process.env.HOME}/.local/bin:`;
+const PATH_PREFIX =
+  `/opt/homebrew/bin:/usr/local/bin:${process.env.HOME}/go/bin:${process.env.HOME}/.local/bin:`;
 
 function run(args: string[], cwd?: string, extraEnv: Record<string, string> = {}): string {
   try {
@@ -49,9 +50,7 @@ function logRunFailure(args: string[], cwd: string | undefined, err: unknown): v
   }
 }
 
-function providerSessionEnv(ctx: {
-  sessionManager?: { getSessionId?: () => string };
-}): Record<string, string> {
+function providerSessionEnv(ctx: { sessionManager?: { getSessionId?: () => string } }): Record<string, string> {
   const sessionID = ctx.sessionManager?.getSessionId?.() || "";
   if (!sessionID) {
     return {};

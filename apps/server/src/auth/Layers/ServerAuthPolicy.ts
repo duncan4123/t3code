@@ -12,13 +12,15 @@ export const makeServerAuthPolicy = Effect.gen(function* () {
   const isRemoteReachable = isWildcardHost(config.host) || !isLoopbackHost(config.host);
 
   const policy =
-    config.mode === "desktop"
-      ? isRemoteReachable
-        ? "remote-reachable"
-        : "desktop-managed-local"
-      : isRemoteReachable
-        ? "remote-reachable"
-        : "loopback-browser";
+    config.noAuth
+      ? "unsafe-no-auth"
+      : config.mode === "desktop"
+        ? isRemoteReachable
+          ? "remote-reachable"
+          : "desktop-managed-local"
+        : isRemoteReachable
+          ? "remote-reachable"
+          : "loopback-browser";
 
   const bootstrapMethods: ServerAuthDescriptor["bootstrapMethods"] =
     policy === "desktop-managed-local"

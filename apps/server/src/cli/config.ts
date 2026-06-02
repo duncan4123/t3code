@@ -69,6 +69,10 @@ export const logWebSocketEventsFlag = Flag.boolean("log-websocket-events").pipe(
   Flag.withAlias("log-ws-events"),
   Flag.optional,
 );
+export const noAuthFlag = Flag.boolean("no-auth").pipe(
+  Flag.withDescription("Disable authentication (unsafe — for development only). Sets auth policy to unsafe-no-auth."),
+  Flag.optional,
+);
 export const tailscaleServeFlag = Flag.boolean("tailscale-serve").pipe(
   Flag.withDescription(
     "Configure Tailscale Serve to expose this backend over HTTPS on the Tailnet.",
@@ -136,6 +140,10 @@ const EnvServerConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
+  noAuth: Config.boolean("T3CODE_NO_AUTH").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
 });
 
 export interface CliServerFlags {
@@ -150,6 +158,7 @@ export interface CliServerFlags {
   readonly autoBootstrapProjectFromCwd: Option.Option<boolean>;
   readonly logWebSocketEvents: Option.Option<boolean>;
   readonly tailscaleServeEnabled: Option.Option<boolean>;
+  readonly noAuth: Option.Option<boolean>;
   readonly tailscaleServePort: Option.Option<number>;
 }
 
@@ -181,6 +190,7 @@ export const sharedServerCommandFlags = {
   devUrl: devUrlFlag,
   noBrowser: noBrowserFlag,
   bootstrapFd: bootstrapFdFlag,
+  noAuth: noAuthFlag,
   autoBootstrapProjectFromCwd: autoBootstrapProjectFromCwdFlag,
   logWebSocketEvents: logWebSocketEventsFlag,
   tailscaleServeEnabled: tailscaleServeFlag,
@@ -230,6 +240,7 @@ export const resolveServerConfig = (
       logWebSocketEvents: flags.logWebSocketEvents ?? Option.none(),
       tailscaleServeEnabled: flags.tailscaleServeEnabled ?? Option.none(),
       tailscaleServePort: flags.tailscaleServePort ?? Option.none(),
+      noAuth: flags.noAuth ?? Option.none(),
     } satisfies CliServerFlags;
     const bootstrapFd = Option.getOrUndefined(normalizedFlags.bootstrapFd) ?? env.bootstrapFd;
     const bootstrapEnvelope =
@@ -330,6 +341,13 @@ export const resolveServerConfig = (
       ),
       () => 443,
     );
+    const noAuth = Option.getOrElse(
+      resolveOptionPrecedence(
+        normalizedFlags.noAuth,
+        Option.fromUndefinedOr(env.noAuth),
+      ),
+      () => false,
+    );
     const staticDir = devUrl ? undefined : yield* resolveStaticDir();
     const host = Option.getOrElse(
       resolveOptionPrecedence(
@@ -372,6 +390,7 @@ export const resolveServerConfig = (
       desktopBootstrapToken,
       autoBootstrapProjectFromCwd,
       logWebSocketEvents,
+      noAuth,
       tailscaleServeEnabled,
       tailscaleServePort,
     };
@@ -396,6 +415,7 @@ export const resolveCliAuthConfig = (
       autoBootstrapProjectFromCwd: Option.none(),
       logWebSocketEvents: Option.none(),
       tailscaleServeEnabled: Option.none(),
+      noAuth: Option.none(),
       tailscaleServePort: Option.none(),
     },
     cliLogLevel,
