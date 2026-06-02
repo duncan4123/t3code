@@ -538,17 +538,17 @@ const mobileEndorsementRows = [
   }
 
   /* Download button icons (platform-aware) */
-  .dl-icon {
+  :global(.dl-icon) {
     display: none;
     width: 14px;
     height: 14px;
     flex-shrink: 0;
   }
 
-  :global([data-platform="mac"]) .dl-icon--apple { display: block; }
-  :global([data-platform="win"]) .dl-icon--windows { display: block; }
-  :global([data-platform="linux"]) .dl-icon--linux { display: block; }
-  :global(:not([data-platform])) .dl-icon--apple { display: block; }
+  :global([data-platform="mac"]) :global(.dl-icon--apple) { display: block; }
+  :global([data-platform="win"]) :global(.dl-icon--windows) { display: block; }
+  :global([data-platform="linux"]) :global(.dl-icon--linux) { display: block; }
+  :global(html:not([data-platform])) :global(.dl-icon--apple) { display: block; }
 
   /* Floating harness marks */
   .hero-float {
